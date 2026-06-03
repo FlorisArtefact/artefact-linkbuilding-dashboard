@@ -1,0 +1,20 @@
+{
+  "client_name": "BWJ - Smartwatch Banden",
+  "excel_path": "data/BWJ-Database_NL_EN_DE_LB_Artefact.xlsx",
+  "languages": ["NL", "EN", "DE"],
+  "currency": "EUR",
+  "domains": {
+    "NL": "smartwatchbanden.nl",
+    "EN": "smartwatch-straps.co.uk",
+    "DE": "smartwatcharmbaender.de"
+  },
+  "gsc_properties": {
+    "NL": "https://smartwatchbanden.nl/",
+    "EN": "https://smartwatch-straps.co.uk/",
+    "DE": "https://smartwatcharmbaender.de/"
+  },
+  "google_sheets": {
+    "spreadsheet_id": "1ER14RidJFycvFidUkEHyQGozxhATD73iPE-YBwSbZuU",
+    "credentials_file": "seo-pagespeed-insights-352108-0a7637b209fd.json"
+  }
+}
