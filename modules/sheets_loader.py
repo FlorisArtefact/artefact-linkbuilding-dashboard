@@ -34,7 +34,12 @@ def _sheet_to_df(service, spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
         result = (
             service.spreadsheets()
             .values()
-            .get(spreadsheetId=spreadsheet_id, range=sheet_name)
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range=sheet_name,
+                valueRenderOption="UNFORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING",
+            )
             .execute()
         )
         rows = result.get("values", [])
