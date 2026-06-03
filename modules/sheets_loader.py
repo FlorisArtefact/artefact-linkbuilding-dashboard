@@ -110,7 +110,19 @@ def load_opportunities_sheets(creds_file: str, spreadsheet_id: str, lang: str) -
 
 
 def sheets_available(config: dict) -> bool:
-    """Return True if both credentials file and spreadsheet_id are configured."""
+    """Return True if Google Sheets is configured — either via local JSON or Streamlit Cloud secrets."""
+    sid = config.get("google_sheets", {}).get("spreadsheet_id", "")
+    if not sid:
+        return False
+
+    # Streamlit Cloud: credentials are in st.secrets
+    try:
+        import streamlit as st
+        if "gcp_service_account" in st.secrets:
+            return True
+    except Exception:
+        pass
+
+    # Local: credentials JSON file on disk
     creds = config.get("google_sheets", {}).get("credentials_file", "")
-    sid   = config.get("google_sheets", {}).get("spreadsheet_id", "")
-    return bool(sid) and bool(creds) and os.path.exists(creds)
+    return bool(creds) and os.path.exists(creds)
