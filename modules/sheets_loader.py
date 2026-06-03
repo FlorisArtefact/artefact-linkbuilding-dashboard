@@ -15,8 +15,14 @@ def _get_service(creds_file: str):
 
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
-    # Streamlit Cloud: credentials stored as secrets
-    if hasattr(st, "secrets") and "gcp_service_account" in st.secrets:
+    # Streamlit Cloud: credentials stored as secrets (wrapped in try/except
+    # because st.secrets raises FileNotFoundError locally when no secrets.toml exists)
+    try:
+        cloud_creds = "gcp_service_account" in st.secrets
+    except Exception:
+        cloud_creds = False
+
+    if cloud_creds:
         creds = service_account.Credentials.from_service_account_info(
             dict(st.secrets["gcp_service_account"]), scopes=SCOPES
         )
