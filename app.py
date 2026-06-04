@@ -31,6 +31,57 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Password gate ──────────────────────────────────────────────────────────────
+def _check_password() -> bool:
+    """Return True if no password is set, or if the user entered the correct one."""
+    try:
+        required = st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        required = os.getenv("APP_PASSWORD", "")
+
+    if not required:
+        return True  # No password configured — skip gate
+
+    if st.session_state.get("_authenticated"):
+        return True
+
+    # ── Login screen ────────────────────────────────────────────────────────────
+    NAVY = "#1B2D5B"
+    PINK = "#E5007D"
+    st.markdown(f"""
+    <style>
+    #MainMenu, footer, header {{visibility: hidden;}}
+    .login-wrap {{
+        max-width: 400px; margin: 8vh auto; padding: 2.5rem;
+        background: white; border-radius: 14px;
+        box-shadow: 0 4px 24px rgba(27,45,91,0.12);
+        border-top: 4px solid {PINK};
+    }}
+    .login-title {{
+        color: {NAVY}; font-size: 1.4rem; font-weight: 700;
+        margin-bottom: 0.3rem;
+    }}
+    .login-sub {{color: #8B9BB4; font-size: 0.88rem; margin-bottom: 1.5rem;}}
+    </style>
+    <div class="login-wrap">
+        <div class="login-title">🔗 Linkbuilding Dashboard</div>
+        <div class="login-sub">Artefact — enter your password to continue</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    pwd = st.text_input("Password", type="password", label_visibility="collapsed",
+                        placeholder="Enter password...")
+    if st.button("Login", use_container_width=True, type="primary"):
+        if pwd == required:
+            st.session_state["_authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password — please try again.")
+    return False
+
+if not _check_password():
+    st.stop()
+
 # ── Brand colors ───────────────────────────────────────────────────────────────
 NAVY   = "#1B2D5B"
 PINK   = "#E5007D"
