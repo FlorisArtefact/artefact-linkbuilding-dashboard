@@ -14,7 +14,18 @@ from modules.data_loader import (
     get_landing_page_summary,
 )
 from modules.ahrefs_client import AhrefsClient
-from modules.gsc_client import load_gsc_csv, merge_gsc_into_table
+from modules.gsc_client import (
+    load_gsc_csv,
+    merge_gsc_into_table,
+    get_gsc_data_api,
+    gsc_api_available,
+)
+from modules.ga4_client import (
+    get_revenue_by_page,
+    merge_ga4_into_table,
+    ga4_available,
+    get_ga4_property_id,
+)
 from modules.sheets_loader import (
     load_live_links_sheets,
     load_opportunities_sheets,
@@ -90,6 +101,7 @@ LIGHT  = "#F0F4F8"
 MID    = "#8B9BB4"
 WHITE  = "#FFFFFF"
 CHART_COLORS = [PINK, NAVY, TEAL, "#FF7043", "#7B1FA2"]
+FLAGS = {"NL": "🇳🇱", "EN": "🇬🇧", "DE": "🇩🇪", "FR": "🇫🇷", "ES": "🇪🇸"}
 
 # ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
@@ -169,6 +181,13 @@ config    = load_config()
 LANGUAGES = config.get("languages", ["NL", "EN", "DE"])
 CLIENT    = config.get("client_name", "Client")
 
+# Resolve credentials path relative to project root — needed by Sheets, GSC API and GA4
+_creds_file = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    config.get("google_sheets", {}).get("credentials_file", "")
+)
+_sheet_id = config.get("google_sheets", {}).get("spreadsheet_id", "")
+
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -226,24 +245,45 @@ with st.sidebar:
     ahrefs_ok = bool(ahrefs_key)
     st.markdown(f"{'🟢' if ahrefs_ok else '🔴'} Ahrefs API {'(connected)' if ahrefs_ok else '(no key)'}")
 
-    # GSC CSV upload
+    # Search Console — API is automatic, CSV upload only as a fallback
     st.markdown("**📊 Search Console data**")
-    gsc_csv = st.file_uploader(
-        "Upload GSC export (Pages CSV)",
-        type=["csv"],
-        help="In GSC: Performance → Pages → Export as CSV",
-        label_visibility="collapsed",
-    )
-    gsc_df = load_gsc_csv(gsc_csv) if gsc_csv else pd.DataFrame()
-    if not gsc_df.empty:
-        st.success(f"GSC data loaded: {len(gsc_df)} pages ✓")
+    use_gsc_api = gsc_api_available(config, _creds_file)
+    if use_gsc_api:
+        st.success("🟢 Search Console API (configured)")
+        st.caption("Auto-refreshes every 6 hours — no manual work needed. "
+                   "Shows no data until the service account is granted access in Search Console.")
+        gsc_csv = None
     else:
-        st.caption("🔴 GSC (no data — upload CSV or connect API)")
-        with st.expander("How to connect GSC?"):
+        gsc_csv = st.file_uploader(
+            "Upload GSC export (Pages CSV)",
+            type=["csv"],
+            help="In GSC: Performance → Pages → Export as CSV",
+            label_visibility="collapsed",
+        )
+        st.caption("🔴 Manual upload (configure the API to automate this)")
+        with st.expander("How to connect the API instead?"):
             st.info(
-                "Export from Google Search Console:\n"
-                "Performance → Pages → Export → Download CSV\n\n"
-                "Or connect the API (see README for free setup instructions)."
+                "1. Enable **Search Console API** in Google Cloud (same project as Sheets)\n"
+                "2. In Search Console: Settings → Users and permissions → Add user →\n"
+                "   paste the service account email → Restricted (read-only)\n"
+                "3. Add the site URL(s) under `gsc_properties` in config.json\n\n"
+                "Once set up, this upload disappears and data refreshes automatically."
+            )
+
+    # Revenue & conversions — Google Analytics 4
+    st.markdown("**💰 Revenue & conversions (GA4)**")
+    use_ga4 = ga4_available(config, _creds_file)
+    if use_ga4:
+        st.success("🟢 Google Analytics 4 (live)")
+        st.caption("Revenue, conversions & ROI per landing page")
+    else:
+        st.caption("🔴 GA4 not connected")
+        with st.expander("How to connect GA4?"):
+            st.info(
+                "1. Enable **Google Analytics Data API** in Google Cloud (same project as Sheets)\n"
+                "2. In GA4: Admin → Property Access Management → Add users →\n"
+                "   paste the service account email → role: Viewer\n"
+                "3. Add the GA4 Property ID under `ga4.property_id` in config.json"
             )
 
     st.divider()
@@ -306,13 +346,6 @@ if not use_sheets and excel_source is None:
 q_filter    = None if selected_quarter == "All" else selected_quarter
 camp_filter = campaign_filter.strip() or None
 
-# Resolve credentials path relative to project root
-_creds_file = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    config.get("google_sheets", {}).get("credentials_file", "")
-)
-_sheet_id = config.get("google_sheets", {}).get("spreadsheet_id", "")
-
 live_data, opp_data = {}, {}
 for lang in LANGUAGES:
     if use_sheets:
@@ -327,6 +360,24 @@ for lang in LANGUAGES:
         opp_data[lang] = load_opportunities(excel_source, lang)
 
 all_live = pd.concat(live_data.values(), ignore_index=True) if any(not d.empty for d in live_data.values()) else pd.DataFrame()
+
+# ── Search Console data: API (automatic) or CSV (fallback) ─────────────────────
+if use_gsc_api:
+    _gsc_dfs = []
+    for lang in LANGUAGES:
+        site_url = config.get("gsc_properties", {}).get(lang, "")
+        if site_url:
+            _gsc_dfs.append(get_gsc_data_api(_creds_file, site_url))
+    gsc_df = pd.concat(_gsc_dfs, ignore_index=True) if _gsc_dfs else pd.DataFrame()
+else:
+    gsc_df = load_gsc_csv(gsc_csv) if gsc_csv else pd.DataFrame()
+
+# ── GA4 revenue & conversions per language ──────────────────────────────────────
+ga4_data = {}
+if use_ga4:
+    for lang in LANGUAGES:
+        prop_id = get_ga4_property_id(config, lang)
+        ga4_data[lang] = get_revenue_by_page(_creds_file, prop_id) if prop_id else pd.DataFrame()
 
 
 # ── Aggregate KPIs ─────────────────────────────────────────────────────────────
@@ -388,6 +439,28 @@ c5.metric(
          "Contact the publisher to resolve this."
 )
 
+# ── GA4 business-impact KPIs (only shown once GA4 is connected) ────────────────
+if use_ga4 and any(not d.empty for d in ga4_data.values()):
+    all_ga4 = pd.concat([d for d in ga4_data.values() if not d.empty], ignore_index=True)
+    total_revenue     = all_ga4["Revenue"].sum()
+    total_conversions = all_ga4["Conversions"].sum()
+    roi               = (total_revenue / total_cost) if total_cost > 0 else None
+
+    g1, g2, g3 = st.columns(3)
+    g1.metric(
+        "Total revenue (GA4)", fmt_eur(total_revenue),
+        help="Total revenue tracked by Google Analytics 4 across all landing pages in this period."
+    )
+    g2.metric(
+        "Total conversions", f"{total_conversions:,.0f}",
+        help="Total number of conversions/goal completions across all landing pages (source: GA4)."
+    )
+    g3.metric(
+        "ROI on link building", f"{roi:.1f}x" if roi is not None else "—",
+        help="Total GA4 revenue divided by total link-building investment. "
+             "Above 1.0x means the campaign has paid for itself in tracked revenue."
+    )
+
 
 # ── Overview: links per language + costs ───────────────────────────────────────
 st.markdown('<div class="section-title">Overview by language</div>', unsafe_allow_html=True)
@@ -419,7 +492,7 @@ with col_cards:
     for lang, cost in lang_costs.items():
         cnt   = lang_counts.get(lang, 0)
         avg_c = cost / cnt if cnt > 0 else 0
-        flag  = {"NL": "🇳🇱", "EN": "🇬🇧", "DE": "🇩🇪"}.get(lang, "🌐")
+        flag  = FLAGS.get(lang, "🌐")
         st.markdown(f"""
         <div class="lang-card">
             <div class="lang-name">{flag} {lang}</div>
@@ -430,8 +503,7 @@ with col_cards:
 
 
 # ── Per-language tabs ──────────────────────────────────────────────────────────
-flags      = {"NL": "🇳🇱", "EN": "🇬🇧", "DE": "🇩🇪"}
-tab_labels = [f"{flags.get(l, '')} {l} ({lang_counts.get(l, 0)})" for l in LANGUAGES]
+tab_labels = [f"{FLAGS.get(l, '')} {l} ({lang_counts.get(l, 0)})" for l in LANGUAGES]
 tabs       = st.tabs(tab_labels)
 
 ahrefs_client = AhrefsClient(ahrefs_key) if ahrefs_key else None
@@ -512,27 +584,10 @@ for i, lang in enumerate(LANGUAGES):
                 fig_da.update_traces(marker_line_width=0)
                 st.plotly_chart(fig_da, use_container_width=True)
 
-        # Charts row 2
+        # Charts row 2: cost vs. revenue per landing page
         ch3, ch4 = st.columns(2)
 
         with ch3:
-            if "Link Type" in df.columns:
-                lt_counts = df["Link Type"].value_counts().reset_index()
-                lt_counts.columns = ["Type", "Count"]
-                fig_lt = px.pie(
-                    lt_counts, names="Type", values="Count",
-                    title=f"Link types — {lang}",
-                    color_discrete_sequence=[PINK, NAVY, TEAL],
-                    hole=0.55,
-                )
-                fig_lt.update_traces(textfont_size=11)
-                fig_lt.update_layout(
-                    **chart_layout(f"Link types — {lang}"),
-                    showlegend=True,
-                )
-                st.plotly_chart(fig_lt, use_container_width=True)
-
-        with ch4:
             if "Link to" in df.columns and "Price" in df.columns:
                 cost_per_lp = (
                     df.groupby("Link to")["Price"]
@@ -558,6 +613,43 @@ for i, lang in enumerate(LANGUAGES):
                 )
                 st.plotly_chart(fig_lp, use_container_width=True)
 
+        with ch4:
+            ga4_lang_df = ga4_data.get(lang, pd.DataFrame())
+            if not ga4_lang_df.empty and "Link to" in df.columns:
+                from urllib.parse import urlparse
+                links_paths = df[["Link to"]].dropna().drop_duplicates().copy()
+                links_paths["_path"] = links_paths["Link to"].apply(lambda u: urlparse(u).path.rstrip("/") or "/")
+                ga4_slim = ga4_lang_df.copy()
+                ga4_slim["_path"] = ga4_slim["path"].apply(lambda p: p.rstrip("/") or "/")
+                ga4_slim = ga4_slim.groupby("_path", as_index=False)["Revenue"].sum()
+                rev_per_lp = links_paths.merge(ga4_slim, on="_path", how="inner")
+                rev_per_lp = rev_per_lp.sort_values("Revenue", ascending=True).tail(8)
+
+                if not rev_per_lp.empty:
+                    rev_per_lp["short"] = rev_per_lp["Link to"].str.split("/").str[-2:].str.join("/")
+                    fig_rev = go.Figure(go.Bar(
+                        x=rev_per_lp["Revenue"],
+                        y=rev_per_lp["short"],
+                        orientation="h",
+                        marker_color=PINK,
+                        text=rev_per_lp["Revenue"].apply(fmt_eur),
+                        textposition="outside",
+                        textfont=dict(size=10, color=NAVY),
+                    ))
+                    fig_rev.update_layout(
+                        **chart_layout(f"Revenue per landing page — {lang} (GA4)"),
+                        yaxis=AXIS_NO_GRID,
+                        xaxis=dict(**AXIS_DEFAULT, title="Revenue (€)"),
+                    )
+                    st.plotly_chart(fig_rev, use_container_width=True)
+                else:
+                    st.info("No GA4 revenue data matched to these landing pages yet.")
+            else:
+                st.info(
+                    "💡 Connect **Google Analytics 4** to see revenue per landing page here — "
+                    "fully automatic once configured, no manual work. See sidebar for setup steps."
+                )
+
         # Landing page performance table
         lp_info_col, _ = st.columns([4, 1])
         with lp_info_col:
@@ -573,15 +665,22 @@ for i, lang in enumerate(LANGUAGES):
 | **Live (200)** | Number of links returning HTTP 200 — confirmed live and reachable |
 | **Ahrefs Avg. Pos.** | Average organic position across all keywords this page ranks for, right now (source: Ahrefs) |
 | **Ahrefs Traffic** | Estimated monthly organic traffic to this page (source: Ahrefs) |
-| **GSC Position** | Average Google Search position according to Search Console data (upload CSV to enable) |
+| **GSC Position** | Average Google Search position (source: Search Console — connects automatically once configured) |
+| **Revenue (GA4)** | Total revenue attributed to this landing page (source: Google Analytics 4) |
+| **Conversions** | Number of conversions/goal completions on this page (source: GA4) |
+| **ROI** | Revenue divided by link-building cost for this page — above 1.0x means the links paid for themselves |
 
-> **Tip:** Low avg. DA + poor GSC position = more high-quality links needed. High DA + strong position = campaign is working.
+> **Tip:** Low avg. DA + poor GSC position = more high-quality links needed. High DA + strong position + high ROI = campaign is working.
 """)
 
         lp_table = get_landing_page_summary(df)
 
         if not gsc_df.empty:
             lp_table = merge_gsc_into_table(lp_table, gsc_df)
+
+        ga4_lang_df = ga4_data.get(lang, pd.DataFrame())
+        if not ga4_lang_df.empty:
+            lp_table = merge_ga4_into_table(lp_table, ga4_lang_df)
 
         if ahrefs_client and not lp_table.empty:
             with st.spinner("Fetching Ahrefs data..."):
@@ -611,6 +710,12 @@ for i, lang in enumerate(LANGUAGES):
             col_cfg["Ahrefs Avg. Pos."] = st.column_config.NumberColumn("Ahrefs Avg. Pos.", format="%.1f")
         if "Ahrefs Traffic" in lp_table.columns:
             col_cfg["Ahrefs Traffic"] = st.column_config.NumberColumn("Ahrefs Traffic", format="%d")
+        if "Revenue" in lp_table.columns:
+            col_cfg["Revenue"] = st.column_config.NumberColumn("Revenue (GA4)", format="€%,.0f")
+        if "Conversions" in lp_table.columns:
+            col_cfg["Conversions"] = st.column_config.NumberColumn("Conversions", format="%.0f")
+        if "ROI" in lp_table.columns:
+            col_cfg["ROI"] = st.column_config.NumberColumn("ROI", format="%.1fx")
 
         st.dataframe(lp_table, use_container_width=True, hide_index=True, column_config=col_cfg)
 

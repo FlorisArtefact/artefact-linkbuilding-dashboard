@@ -4,38 +4,23 @@ Reads the same sheet structure as the Excel database.
 """
 import streamlit as st
 import pandas as pd
-import os
-from typing import Optional
+from modules.google_auth import get_credentials, credentials_configured
 
-# Lazy imports to avoid hard dependency when Sheets is not configured
+SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
+
 def _get_service(creds_file: str):
-    from google.oauth2 import service_account
     from googleapiclient.discovery import build
-    import streamlit as st
 
-    SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-
-    # Streamlit Cloud: credentials stored as secrets (wrapped in try/except
-    # because st.secrets raises FileNotFoundError locally when no secrets.toml exists)
-    try:
-        cloud_creds = "gcp_service_account" in st.secrets
-    except Exception:
-        cloud_creds = False
-
-    if cloud_creds:
-        creds = service_account.Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]), scopes=SCOPES
-        )
-    else:
-        # Local: credentials JSON file on disk
-        creds = service_account.Credentials.from_service_account_file(
-            creds_file, scopes=SCOPES
-        )
+    creds = get_credentials(creds_file, SHEETS_SCOPES)
     return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 
 def _sheet_to_df(service, spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
-    """Read a single sheet tab into a DataFrame."""
+    """Read a single sheet tab into a DataFrame. Silently returns empty if the
+    tab doesn't exist yet (e.g. a language not yet added) — only real errors warn."""
+    from googleapiclient.errors import HttpError
+
     try:
         result = (
             service.spreadsheets()
@@ -53,9 +38,14 @@ def _sheet_to_df(service, spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
             return pd.DataFrame()
         headers = rows[0]
         data    = rows[1:]
-        # Pad short rows so all rows have the same number of columns
         data = [row + [""] * (len(headers) - len(row)) for row in data]
         return pd.DataFrame(data, columns=headers)
+    except HttpError as e:
+        if e.resp.status == 400 and "Unable to parse range" in str(e):
+            # Tab doesn't exist yet (e.g. FR/ES not added to the sheet yet) — expected, stay silent
+            return pd.DataFrame()
+        st.warning(f"Could not load sheet '{sheet_name}': {e}")
+        return pd.DataFrame()
     except Exception as e:
         st.warning(f"Could not load sheet '{sheet_name}': {e}")
         return pd.DataFrame()
@@ -66,11 +56,9 @@ def _normalise_live(df: pd.DataFrame, lang: str) -> pd.DataFrame:
     if df.empty:
         return df
     df.columns = df.columns.str.strip()
-    # Fix Price column encoding
     price_cols = [c for c in df.columns if "price" in c.lower() or "prijs" in c.lower()]
     if price_cols:
         df = df.rename(columns={price_cols[0]: "Price"})
-    # Parse types
     if "LL Date" in df.columns:
         df["LL Date"] = pd.to_datetime(df["LL Date"], errors="coerce")
     for col in ["DA", "Price", "Q", "Year", "Status code"]:
@@ -114,15 +102,5 @@ def sheets_available(config: dict) -> bool:
     sid = config.get("google_sheets", {}).get("spreadsheet_id", "")
     if not sid:
         return False
-
-    # Streamlit Cloud: credentials are in st.secrets
-    try:
-        import streamlit as st
-        if "gcp_service_account" in st.secrets:
-            return True
-    except Exception:
-        pass
-
-    # Local: credentials JSON file on disk
     creds = config.get("google_sheets", {}).get("credentials_file", "")
-    return bool(creds) and os.path.exists(creds)
+    return credentials_configured(creds)

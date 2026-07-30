@@ -13,6 +13,14 @@
     "EN": "https://smartwatch-straps.co.uk/",
     "DE": "https://smartwatcharmbaender.de/"
   },
+  "ga4": {
+    "property_id": "",
+    "property_ids": {
+      "NL": "",
+      "EN": "",
+      "DE": ""
+    }
+  },
   "google_sheets": {
     "spreadsheet_id": "1ER14RidJFycvFidUkEHyQGozxhATD73iPE-YBwSbZuU",
     "credentials_file": "seo-pagespeed-insights-352108-0a7637b209fd.json"
