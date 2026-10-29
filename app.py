@@ -30,6 +30,7 @@ from modules.ga4_client import (
     load_ga4_csv,
 )
 from modules.citations_ui import render_citations_section
+from modules.health_ui import render_health_section
 from modules.referral_ui import render_referral_section
 from modules.growth_ui import render_growth_section
 from modules.ranking_ui import render_ranking_section
@@ -635,6 +636,7 @@ render_referral_section(
     flags=FLAGS, demo_mode=demo_mode,
 )
 render_citations_section(raw_links, FLAGS, demo_mode)
+render_health_section(raw_links, FLAGS, demo_mode)
 
 with scorecard_box:
     render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode)
