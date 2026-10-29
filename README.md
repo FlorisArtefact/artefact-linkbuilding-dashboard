@@ -26,6 +26,16 @@ Het dashboard opent op http://localhost:8501
 
 ---
 
+## ROI & budgetadvies (generieke module)
+
+`modules/roi_model.py` (rekenwerk) + `modules/roi_ui.py` (scherm). Per klant stel je alleen `config.json → roi` in
+(attributie-aandelen laag/realistisch/hoog, conversieratio, waarde per conversie, drempels). Zet `"demo_mode": true`
+of gebruik de sidebar-toggle om het zonder credentials te bekijken. Zie `../VOORTGANG-EN-VOLGENDE-STAPPEN.md`
+voor de uitgangspunten; de standaardwaarden zijn placeholders tot ze met BWJ/pillar leads zijn gevalideerd.
+Tests: `python -m pytest tests -q`.
+
+---
+
 ## Nieuwe klant instellen
 
 1. Kopieer dit project naar een nieuwe map

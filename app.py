@@ -25,12 +25,17 @@ from modules.ga4_client import (
     merge_ga4_into_table,
     ga4_available,
     get_ga4_property_id,
+    get_monthly_revenue_by_page,
+    load_ga4_csv,
 )
+from modules.growth_ui import render_growth_section
 from modules.sheets_loader import (
     load_live_links_sheets,
     load_opportunities_sheets,
     sheets_available,
 )
+from modules import demo_data
+from modules.roi_ui import sidebar_assumptions, render_roi_section
 
 load_dotenv()
 
@@ -82,7 +87,7 @@ def _check_password() -> bool:
 
     pwd = st.text_input("Password", type="password", label_visibility="collapsed",
                         placeholder="Enter password...")
-    if st.button("Login", use_container_width=True, type="primary"):
+    if st.button("Login", width="stretch", type="primary"):
         if pwd == required:
             st.session_state["_authenticated"] = True
             st.rerun()
@@ -173,7 +178,7 @@ AXIS_NO_GRID = dict(showgrid=False, zeroline=False)
 @st.cache_data(show_spinner=False)
 def load_config() -> dict:
     if os.path.exists("config.json"):
-        with open("config.json") as f:
+        with open("config.json", encoding="utf-8") as f:
             return json.load(f)
     return {"client_name": "Client", "languages": ["NL", "EN", "DE"], "currency": "EUR"}
 
@@ -197,9 +202,16 @@ with st.sidebar:
 
     # — Data source
     st.markdown("**📂 Data source**")
-    use_sheets = sheets_available(config)
+    demo_mode = st.toggle(
+        "🧪 Demo data", value=bool(config.get("demo_mode", False)),
+        help="Shows the dashboard with SYNTHETIC data — no credentials needed. Never show demo numbers as real results.",
+    )
+    use_sheets = sheets_available(config) and not demo_mode
 
-    if use_sheets:
+    if demo_mode:
+        st.warning("DEMO MODE — all data is synthetic")
+        excel_source = None
+    elif use_sheets:
         sid = config["google_sheets"]["spreadsheet_id"]
         st.success("🟢 Google Sheets (live)")
         st.caption("Auto-refreshes every 5 minutes")
@@ -234,6 +246,11 @@ with st.sidebar:
 
     st.divider()
 
+    # — ROI assumptions (generic ROI & budget-advice module)
+    roi_assumptions = sidebar_assumptions(config)
+
+    st.divider()
+
     # — APIs
     st.markdown("**🔌 API connections**")
     ahrefs_key = os.getenv("AHREFS_API_KEY", "")
@@ -252,7 +269,11 @@ with st.sidebar:
         st.success("🟢 Search Console API (configured)")
         st.caption("Auto-refreshes every 6 hours — no manual work needed. "
                    "Shows no data until the service account is granted access in Search Console.")
-        gsc_csv = None
+        with st.expander("📎 No API access yet? Upload exports (CSV/ZIP)"):
+            st.caption("Per market: Performance → Pages → Export (CSV or ZIP, last 3 months). "
+                       "Used only while the API returns no data. Upload all markets together.")
+            gsc_csv = st.file_uploader("GSC exports", type=["csv", "zip"], accept_multiple_files=True,
+                                       key="gsc_csv_multi", label_visibility="collapsed")
     else:
         gsc_csv = st.file_uploader(
             "Upload GSC export (Pages CSV)",
@@ -273,6 +294,7 @@ with st.sidebar:
     # Revenue & conversions — Google Analytics 4
     st.markdown("**💰 Revenue & conversions (GA4)**")
     use_ga4 = ga4_available(config, _creds_file)
+    ga4_csvs = {}
     if use_ga4:
         st.success("🟢 Google Analytics 4 (live)")
         st.caption("Revenue, conversions & ROI per landing page")
@@ -285,6 +307,11 @@ with st.sidebar:
                 "   paste the service account email → role: Viewer\n"
                 "3. Add the GA4 Property ID under `ga4.property_id` in config.json"
             )
+        with st.expander("📎 Or upload a GA4 export (CSV)"):
+            st.caption("Per market: last 90 days, dimensions *Landing page + query string* and "
+                       "*Session default channel group*, metrics *Sessions*, *Key events*, *Total revenue*.")
+            for _l in LANGUAGES:
+                ga4_csvs[_l] = st.file_uploader(f"GA4 export {_l}", type=["csv"], key=f"ga4csv_{_l}")
 
     st.divider()
 
@@ -328,7 +355,7 @@ Works as long as you are on the same network.
 
 
 # ── Guard: no data ─────────────────────────────────────────────────────────────
-if not use_sheets and excel_source is None:
+if not demo_mode and not use_sheets and excel_source is None:
     st.markdown(f"""
     <div class="dash-header">
         <div>
@@ -346,15 +373,20 @@ if not use_sheets and excel_source is None:
 q_filter    = None if selected_quarter == "All" else selected_quarter
 camp_filter = campaign_filter.strip() or None
 
-live_data, opp_data = {}, {}
+live_data, opp_data, raw_links = {}, {}, {}
 for lang in LANGUAGES:
-    if use_sheets:
+    if demo_mode:
+        raw = demo_data.demo_live_links(lang, selected_year)
+    elif use_sheets:
         raw = load_live_links_sheets(_creds_file, _sheet_id, lang)
     else:
         raw = load_live_links(excel_source, lang)
+    raw_links[lang] = raw   # unfiltered: growth analysis needs the FIRST link ever to a page
     live_data[lang] = apply_filters(raw, year=selected_year, quarter=q_filter, campaign=camp_filter)
 
-    if use_sheets:
+    if demo_mode:
+        opp_data[lang] = demo_data.demo_opportunities(lang)
+    elif use_sheets:
         opp_data[lang] = load_opportunities_sheets(_creds_file, _sheet_id, lang)
     else:
         opp_data[lang] = load_opportunities(excel_source, lang)
@@ -362,22 +394,43 @@ for lang in LANGUAGES:
 all_live = pd.concat(live_data.values(), ignore_index=True) if any(not d.empty for d in live_data.values()) else pd.DataFrame()
 
 # ── Search Console data: API (automatic) or CSV (fallback) ─────────────────────
-if use_gsc_api:
+if demo_mode:
+    gsc_df = pd.concat([demo_data.demo_gsc(l) for l in LANGUAGES], ignore_index=True)
+elif use_gsc_api:
     _gsc_dfs = []
     for lang in LANGUAGES:
         site_url = config.get("gsc_properties", {}).get(lang, "")
         if site_url:
             _gsc_dfs.append(get_gsc_data_api(_creds_file, site_url))
     gsc_df = pd.concat(_gsc_dfs, ignore_index=True) if _gsc_dfs else pd.DataFrame()
+    if gsc_df.empty and gsc_csv:   # API has no access yet -> fall back to uploaded exports
+        _csv_dfs = [d for d in (load_gsc_csv(f) for f in gsc_csv) if not d.empty]
+        gsc_df = pd.concat(_csv_dfs, ignore_index=True) if _csv_dfs else pd.DataFrame()
 else:
     gsc_df = load_gsc_csv(gsc_csv) if gsc_csv else pd.DataFrame()
 
 # ── GA4 revenue & conversions per language ──────────────────────────────────────
-ga4_data = {}
-if use_ga4:
+ga4_data, monthly_data = {}, {}
+if demo_mode:
+    use_ga4 = True
+    ga4_data = {lang: demo_data.demo_ga4(lang) for lang in LANGUAGES}
+    monthly_data = {lang: demo_data.demo_monthly(lang, raw_links.get(lang)) for lang in LANGUAGES}
+elif use_ga4:
     for lang in LANGUAGES:
         prop_id = get_ga4_property_id(config, lang)
-        ga4_data[lang] = get_revenue_by_page(_creds_file, prop_id) if prop_id else pd.DataFrame()
+        # If all markets share ONE property (no per-language id), filter on this market's domain
+        _shared = not config.get("ga4", {}).get("property_ids", {}).get(lang)
+        ga4_data[lang] = (
+            get_revenue_by_page(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "")
+            if prop_id else pd.DataFrame()
+        )
+        monthly_data[lang] = (
+            get_monthly_revenue_by_page(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "")
+            if prop_id else pd.DataFrame()
+        )
+elif any(ga4_csvs.values()):
+    use_ga4 = True
+    ga4_data = {lang: (load_ga4_csv(f) if f else pd.DataFrame()) for lang, f in ga4_csvs.items()}
 
 
 # ── Aggregate KPIs ─────────────────────────────────────────────────────────────
@@ -398,7 +451,7 @@ lang_costs  = {lang: df["Price"].sum() if "Price" in df.columns else 0 for lang,
 
 # ── Dashboard header ───────────────────────────────────────────────────────────
 quarter_label = selected_quarter if selected_quarter != "All" else "All quarters"
-data_badge    = "🟢 Live · Google Sheets" if use_sheets else "📁 Excel"
+data_badge    = "🧪 Demo data" if demo_mode else ("🟢 Live · Google Sheets" if use_sheets else "📁 Excel")
 st.markdown(f"""
 <div class="dash-header">
     <div>
@@ -456,10 +509,57 @@ if use_ga4 and any(not d.empty for d in ga4_data.values()):
         help="Total number of conversions/goal completions across all landing pages (source: GA4)."
     )
     g3.metric(
-        "ROI on link building", f"{roi:.1f}x" if roi is not None else "—",
-        help="Total GA4 revenue divided by total link-building investment. "
-             "Above 1.0x means the campaign has paid for itself in tracked revenue."
+        "Gross revenue / cost", f"{roi:.1f}x" if roi is not None else "—",
+        help="Organic GA4 revenue divided by link-building investment — NOT incremental ROI "
+             "(it does not separate link-building impact from other SEO). "
+             "See 'Business value & budget advice' below for the scenario-based ROI."
     )
+
+
+# ── Business value & budget advice (generic ROI module) ────────────────────────
+# Fallback value basis while GA4 / Search Console are not connected: Ahrefs organic traffic
+# estimate of the linked landing pages (monthly). Only fetched when there is no better source.
+@st.cache_data(ttl=3600, show_spinner=False)
+def _ahrefs_monthly_traffic(api_key: str, urls: tuple) -> float:
+    """Sum of Ahrefs monthly organic traffic estimates for the given URLs (parallel, cached 1h)."""
+    from concurrent.futures import ThreadPoolExecutor
+    client = AhrefsClient(api_key)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        return float(sum(m["est_traffic"] for m in pool.map(client.get_landing_page_metrics, urls)))
+
+
+_ahrefs_monthly = {}
+if ahrefs_key and not demo_mode and gsc_df.empty and not any(not d.empty for d in ga4_data.values()):
+    with st.spinner("Estimating organic traffic via Ahrefs..."):
+        for _lang in LANGUAGES:
+            _df = live_data.get(_lang, pd.DataFrame())
+            if not _df.empty and "Link to" in _df.columns:
+                _ahrefs_monthly[_lang] = _ahrefs_monthly_traffic(
+                    ahrefs_key, tuple(sorted(_df["Link to"].dropna().unique())))
+
+render_roi_section(
+    client=CLIENT,
+    period_label=f"{selected_year} · {quarter_label}",
+    per_lang={
+        lang: {"links": live_data.get(lang, pd.DataFrame()), "ga4": ga4_data.get(lang), "gsc": gsc_df,
+               "ahrefs_monthly": _ahrefs_monthly.get(lang, 0)}
+        for lang in LANGUAGES
+    },
+    a=roi_assumptions,
+    ga4_connected=bool(use_ga4),
+    gsc_connected=bool(demo_mode or not gsc_df.empty),
+    demo_mode=demo_mode,
+    flags=FLAGS,
+)
+
+# ── Revenue growth on linked pages (per URL / category / domain) ────────────────
+render_growth_section(
+    per_lang={lang: {"monthly": monthly_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
+    categories=config.get("categories"),
+    currency="€",
+    flags=FLAGS,
+    demo_mode=demo_mode,
+)
 
 
 # ── Overview: links per language + costs ───────────────────────────────────────
@@ -484,7 +584,7 @@ with col_chart:
             yaxis=AXIS_DEFAULT,
             xaxis=AXIS_NO_GRID,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info("No links found for the selected filters.")
 
@@ -506,7 +606,7 @@ with col_cards:
 tab_labels = [f"{FLAGS.get(l, '')} {l} ({lang_counts.get(l, 0)})" for l in LANGUAGES]
 tabs       = st.tabs(tab_labels)
 
-ahrefs_client = AhrefsClient(ahrefs_key) if ahrefs_key else None
+ahrefs_client = AhrefsClient(ahrefs_key) if (ahrefs_key and not demo_mode) else None
 
 for i, lang in enumerate(LANGUAGES):
     with tabs[i]:
@@ -566,7 +666,7 @@ for i, lang in enumerate(LANGUAGES):
                     xaxis=AXIS_NO_GRID,
                     barmode="group",
                 )
-                st.plotly_chart(fig_t, use_container_width=True)
+                st.plotly_chart(fig_t, width="stretch")
 
         with ch2:
             if "DA" in df.columns and df["DA"].notna().any():
@@ -582,7 +682,7 @@ for i, lang in enumerate(LANGUAGES):
                     xaxis=dict(**AXIS_NO_GRID, title="Domain Authority"),
                 )
                 fig_da.update_traces(marker_line_width=0)
-                st.plotly_chart(fig_da, use_container_width=True)
+                st.plotly_chart(fig_da, width="stretch")
 
         # Charts row 2: cost vs. revenue per landing page
         ch3, ch4 = st.columns(2)
@@ -611,7 +711,7 @@ for i, lang in enumerate(LANGUAGES):
                     yaxis=AXIS_NO_GRID,
                     xaxis=dict(**AXIS_DEFAULT, title="Cost (€)"),
                 )
-                st.plotly_chart(fig_lp, use_container_width=True)
+                st.plotly_chart(fig_lp, width="stretch")
 
         with ch4:
             ga4_lang_df = ga4_data.get(lang, pd.DataFrame())
@@ -641,7 +741,7 @@ for i, lang in enumerate(LANGUAGES):
                         yaxis=AXIS_NO_GRID,
                         xaxis=dict(**AXIS_DEFAULT, title="Revenue (€)"),
                     )
-                    st.plotly_chart(fig_rev, use_container_width=True)
+                    st.plotly_chart(fig_rev, width="stretch")
                 else:
                     st.info("No GA4 revenue data matched to these landing pages yet.")
             else:
@@ -682,7 +782,12 @@ for i, lang in enumerate(LANGUAGES):
         if not ga4_lang_df.empty:
             lp_table = merge_ga4_into_table(lp_table, ga4_lang_df)
 
-        if ahrefs_client and not lp_table.empty:
+        if demo_mode and not lp_table.empty:
+            _demo_ah = {u: demo_data.demo_ahrefs_for_page(u) for u in lp_table["Landing Page"].dropna()}
+            lp_table["Ahrefs Avg. Pos."] = lp_table["Landing Page"].map(lambda u: _demo_ah.get(u, {}).get("avg_position"))
+            lp_table["Ahrefs Traffic"] = lp_table["Landing Page"].map(lambda u: _demo_ah.get(u, {}).get("est_traffic"))
+            lp_table["Keywords"] = lp_table["Landing Page"].map(lambda u: _demo_ah.get(u, {}).get("keywords"))
+        elif ahrefs_client and not lp_table.empty:
             with st.spinner("Fetching Ahrefs data..."):
                 urls        = lp_table["Landing Page"].dropna().tolist()
                 ahrefs_data = ahrefs_client.enrich_landing_pages(urls)
@@ -717,7 +822,7 @@ for i, lang in enumerate(LANGUAGES):
         if "ROI" in lp_table.columns:
             col_cfg["ROI"] = st.column_config.NumberColumn("ROI", format="%.1fx")
 
-        st.dataframe(lp_table, use_container_width=True, hide_index=True, column_config=col_cfg)
+        st.dataframe(lp_table, width="stretch", hide_index=True, column_config=col_cfg)
 
         with st.expander(f"📋 All live links — {lang} ({len(df)})"):
             show_cols = ["LL Date", "Live Link", "Domain", "DA", "Link Type", "Status code",
@@ -725,7 +830,7 @@ for i, lang in enumerate(LANGUAGES):
             available = [c for c in show_cols if c in df.columns]
             st.dataframe(
                 df[available].sort_values("LL Date", ascending=False) if "LL Date" in df.columns else df[available],
-                use_container_width=True, hide_index=True,
+                width="stretch", hide_index=True,
             )
 
         opp = opp_data.get(lang, pd.DataFrame())
@@ -735,7 +840,7 @@ for i, lang in enumerate(LANGUAGES):
                 st.caption(f"Total in pipeline: **{len(opp)}** &nbsp;·&nbsp; Approved: **{len(approved)}**")
                 opp_cols    = ["Domain", "DR", "Topic", "Price", "Proposed month", "Approved?", "Link to", "Anchor"]
                 avail_opp   = [c for c in opp_cols if c in opp.columns]
-                st.dataframe(opp[avail_opp], use_container_width=True, hide_index=True)
+                st.dataframe(opp[avail_opp], width="stretch", hide_index=True)
 
 
 # ── Broken links section ───────────────────────────────────────────────────────
@@ -750,7 +855,7 @@ if broken_links > 0 and "Status code" in all_live.columns:
     want_cols = ["Live Link", "Language", "Domain", "Status code", "Price", "Link to"]
     show_cols = [c for c in want_cols if c in all_live.columns]
     broken_df = all_live[~all_live["Status code"].isin([200])][show_cols]
-    st.dataframe(broken_df, use_container_width=True, hide_index=True)
+    st.dataframe(broken_df, width="stretch", hide_index=True)
 
 
 # ── Impact analysis ────────────────────────────────────────────────────────────
@@ -829,7 +934,9 @@ else:
 
         # Ahrefs position history (monthly snapshots)
         ahrefs_history = pd.DataFrame()
-        if ahrefs_client:
+        if demo_mode:
+            ahrefs_history = demo_data.demo_position_history(ia_url, ia_months)
+        elif ahrefs_client:
             cache_key = f"pos_hist_{ia_url}_{ia_months}"
             if cache_key not in st.session_state:
                 short = ia_url.rstrip("/").split("/")[-1] or ia_url
@@ -932,7 +1039,7 @@ else:
                 hovermode="x unified",
                 hoverlabel=dict(bgcolor="white", font_size=11, font_family="Roboto"),
             )
-            st.plotly_chart(fig_impact, use_container_width=True)
+            st.plotly_chart(fig_impact, width="stretch")
 
             s1, s2, s3, s4 = st.columns(4)
             if not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any():
@@ -972,7 +1079,7 @@ else:
 # ── Footer ─────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <div class="dash-footer">
-    Artefact Linkbuilding Dashboard &nbsp;·&nbsp; Template v1.0 &nbsp;·&nbsp;
+    Artefact Linkbuilding Dashboard &nbsp;·&nbsp; Template v2.0 &nbsp;·&nbsp;
     Client: <strong>{CLIENT}</strong> &nbsp;·&nbsp;
     {datetime.now().strftime('%d-%m-%Y')}
 </div>

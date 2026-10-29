@@ -32,7 +32,21 @@ def get_gsc_data_api(creds_file: str, site_url: str, days: int = 90) -> pd.DataF
             "dimensions": ["page"],
             "rowLimit": 25000,
         }
-        resp = service.searchanalytics().query(siteUrl=site_url, body=body).execute()
+        # The client may have a URL-prefix property OR a Domain property (sc-domain:...). Try the
+        # configured URL first, then the common variants, so nobody has to ask which one it is.
+        from urllib.parse import urlparse
+        host = urlparse(site_url).netloc.lower() if "://" in site_url else site_url.replace("sc-domain:", "")
+        bare = host.removeprefix("www.")
+        candidates = [site_url, f"sc-domain:{bare}", f"https://{bare}/", f"https://www.{bare}/"]
+        resp = None
+        for cand in dict.fromkeys(candidates):
+            try:
+                resp = service.searchanalytics().query(siteUrl=cand, body=body).execute()
+                break
+            except Exception:
+                continue
+        if resp is None:
+            return pd.DataFrame()
         rows = resp.get("rows", [])
         if not rows:
             return pd.DataFrame()
@@ -55,7 +69,18 @@ def get_gsc_data_api(creds_file: str, site_url: str, days: int = 90) -> pd.DataF
 def load_gsc_csv(uploaded_file) -> pd.DataFrame:
     """Parse a GSC performance export (Pages view) CSV — fallback when the API isn't configured."""
     try:
-        df = pd.read_csv(uploaded_file)
+        import io
+        import zipfile
+        if str(getattr(uploaded_file, "name", "")).lower().endswith(".zip"):
+            # GSC's "Export → Download CSV" delivers a ZIP; take the pages table (Pages/Pagina's)
+            with zipfile.ZipFile(uploaded_file) as zf:
+                names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+                pick = next((n for n in names if "page" in n.lower() or "pagina" in n.lower()), None)
+                if pick is None:
+                    return pd.DataFrame()
+                df = pd.read_csv(io.BytesIO(zf.read(pick)))
+        else:
+            df = pd.read_csv(uploaded_file)
         df.columns = df.columns.str.strip()
         rename_map = {}
         for col in df.columns:

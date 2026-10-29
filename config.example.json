@@ -1,0 +1,19 @@
+{
+  "client_name": "Client name",
+  "languages": ["NL"],
+  "currency": "EUR",
+  "demo_mode": true,
+  "domains": { "NL": "client.nl" },
+  "gsc_properties": { "NL": "https://client.nl/" },
+  "ga4": { "property_id": "", "property_ids": { "NL": "" } },
+  "roi": {
+    "horizon_months": 12,
+    "attribution_share": { "low": 0.10, "base": 0.20, "high": 0.35 },
+    "conversion_rate": { "low": 0.010, "base": 0.018, "high": 0.025 },
+    "value_per_conversion": 45,
+    "thresholds": { "increase_base_roi": 2.0, "increase_low_roi": 1.0, "decrease_base_roi": 1.0 },
+    "min_investment": 250,
+    "currency_symbol": "€"
+  },
+  "google_sheets": { "spreadsheet_id": "", "credentials_file": "" }
+}

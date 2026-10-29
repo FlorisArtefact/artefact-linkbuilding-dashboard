@@ -31,8 +31,12 @@ def ga4_available(config: dict, creds_file: str, lang: str = None) -> bool:
 
 
 @st.cache_data(ttl=21600, show_spinner=False)  # 6 hours
-def get_revenue_by_page(creds_file: str, property_id: str, days: int = 90) -> pd.DataFrame:
-    """Fetch revenue, conversions and sessions per landing page path from GA4."""
+def get_revenue_by_page(creds_file: str, property_id: str, days: int = 90, organic_only: bool = True,
+                        hostname: str = "") -> pd.DataFrame:
+    """Fetch revenue, conversions and sessions per landing page path from GA4.
+
+    organic_only=True restricts to the 'Organic Search' channel group — required for a fair
+    link-building ROI (paid/direct/email revenue on the same page is not caused by links)."""
     if not property_id:
         return pd.DataFrame()
     try:
@@ -51,6 +55,21 @@ def get_revenue_by_page(creds_file: str, property_id: str, days: int = 90) -> pd
             ],
             "limit": 10000,
         }
+        filters = []
+        if organic_only:
+            filters.append({"filter": {
+                "fieldName": "sessionDefaultChannelGroup",
+                "stringFilter": {"matchType": "EXACT", "value": "Organic Search"},
+            }})
+        if hostname:   # one GA4 property shared by several domains -> only this market's domain
+            filters.append({"filter": {
+                "fieldName": "hostName",
+                "stringFilter": {"matchType": "CONTAINS", "value": hostname.removeprefix("www.")},
+            }})
+        if len(filters) == 1:
+            body["dimensionFilter"] = filters[0]
+        elif filters:
+            body["dimensionFilter"] = {"andGroup": {"expressions": filters}}
         resp = service.properties().runReport(
             property=f"properties/{property_id}", body=body
         ).execute()
@@ -69,6 +88,88 @@ def get_revenue_by_page(creds_file: str, property_id: str, days: int = 90) -> pd
         # Fail silently — e.g. the service account may not have been granted
         # access to this GA4 property yet. Degrade gracefully rather than
         # surface a raw API error to the client.
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)  # 6 hours
+def get_monthly_revenue_by_page(creds_file: str, property_id: str, months: int = 14, organic_only: bool = True,
+                                hostname: str = "") -> pd.DataFrame:
+    """Monthly organic revenue/sessions per landing page (for growth analysis).
+    Columns: month (first day), path, Revenue, Sessions."""
+    if not property_id:
+        return pd.DataFrame()
+    try:
+        from datetime import date
+        from googleapiclient.discovery import build
+
+        creds   = get_credentials(creds_file, GA4_SCOPES)
+        service = build("analyticsdata", "v1beta", credentials=creds, cache_discovery=False)
+        start = (pd.Timestamp(date.today()).replace(day=1) - pd.DateOffset(months=months)).strftime("%Y-%m-%d")
+        body = {
+            "dateRanges": [{"startDate": start, "endDate": "today"}],
+            "dimensions": [{"name": "yearMonth"}, {"name": "landingPagePlusQueryString"}],
+            "metrics": [{"name": "totalRevenue"}, {"name": "sessions"}],
+            "limit": 100000,
+        }
+        filters = []
+        if organic_only:
+            filters.append({"filter": {"fieldName": "sessionDefaultChannelGroup",
+                                       "stringFilter": {"matchType": "EXACT", "value": "Organic Search"}}})
+        if hostname:
+            filters.append({"filter": {"fieldName": "hostName",
+                                       "stringFilter": {"matchType": "CONTAINS", "value": hostname.removeprefix("www.")}}})
+        if len(filters) == 1:
+            body["dimensionFilter"] = filters[0]
+        elif filters:
+            body["dimensionFilter"] = {"andGroup": {"expressions": filters}}
+        resp = service.properties().runReport(property=f"properties/{property_id}", body=body).execute()
+        rows = resp.get("rows", [])
+        data = [{"month": pd.to_datetime(r["dimensionValues"][0]["value"] + "01", format="%Y%m%d"),
+                 "path": r["dimensionValues"][1]["value"].split("?")[0],
+                 "Revenue": float(r["metricValues"][0]["value"]), "Sessions": float(r["metricValues"][1]["value"])}
+                for r in rows]
+        return pd.DataFrame(data)
+    except Exception:
+        return pd.DataFrame()
+
+
+def load_ga4_csv(uploaded_file) -> pd.DataFrame:
+    """Fallback while the service account has no GA4 access: parse a GA4 report export (CSV).
+
+    Expected columns (names may vary slightly per GA4 UI language/version):
+      landing page (+ query string), [session default channel group], sessions,
+      key events / conversions, total revenue. Rows are filtered to 'Organic Search' when the
+      channel column is present. Same schema as get_revenue_by_page(); assumes a 90-day export."""
+    try:
+        import io
+        text = uploaded_file.getvalue().decode("utf-8-sig", errors="replace")
+        body = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+        df = pd.read_csv(io.StringIO(body))
+        df.columns = [str(c).strip() for c in df.columns]
+        low = {c: c.lower() for c in df.columns}
+        page = next((c for c, l in low.items() if "landing" in l or "page" in l), None)
+        chan = next((c for c, l in low.items() if "channel" in l), None)
+        rev = next((c for c, l in low.items() if "revenue" in l), None)
+        conv = next((c for c, l in low.items() if "key event" in l or "conversion" in l), None)
+        sess = next((c for c, l in low.items() if "session" in l and "channel" not in l and "conversion" not in l), None)
+        if page is None:
+            return pd.DataFrame()
+        if chan is not None:
+            df = df[df[chan].astype(str).str.strip().str.lower() == "organic search"]
+
+        def num(col):
+            if col is None:
+                return pd.Series(0.0, index=df.index)
+            # GA4 CSV exports use en-US numbers (1,234.56); drop thousand separators and symbols
+            s = df[col].astype(str).str.replace(r"[^\d.\-]", "", regex=True)
+            return pd.to_numeric(s, errors="coerce").fillna(0.0)
+
+        out = pd.DataFrame({
+            "path": df[page].astype(str).str.split("?").str[0],
+            "Revenue": num(rev), "Conversions": num(conv), "Sessions": num(sess),
+        })
+        return out.groupby("path", as_index=False).sum(numeric_only=True)
+    except Exception:
         return pd.DataFrame()
 
 

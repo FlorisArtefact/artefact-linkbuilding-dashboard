@@ -15,3 +15,7 @@ __pycache__/
 
 # Streamlit local secrets
 .streamlit/secrets.toml
+
+# config.json holds only IDs/settings, no secrets -> keep tracked
+!config.json
+!config.example.json
