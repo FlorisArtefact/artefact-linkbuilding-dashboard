@@ -19,3 +19,4 @@ __pycache__/
 # config.json holds only IDs/settings, no secrets -> keep tracked
 !config.json
 !config.example.json
+!clients/*.json

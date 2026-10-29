@@ -50,7 +50,7 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
             cards.append(_card("Do we see organic growth?", "In line with the domain", txt, GREY))
         known += 1
     else:
-        cards.append(_card("Do we see organic growth?", "Waiting for GA4", "Monthly organic revenue per page is needed.", GREY))
+        cards.append(_card("Do we see organic growth?", "Waiting for GA4", "Needs monthly organic revenue per page (GA4).", GREY))
 
     # 3) Rankings
     st_ = (ranking or {}).get("status", "unknown")
@@ -62,7 +62,7 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
         known += 1
         positive += 1 if st_ == "improving" else 0
     else:
-        cards.append(_card("Are rankings getting better?", "Not loaded", "Load the ranking trend below (uses Ahrefs units).", GREY))
+        cards.append(_card("Are rankings getting better?", "Not loaded", "Open the Results tab and load the ranking trend (uses Ahrefs units).", GREY))
 
     st.markdown('<div class="section-title">🎯 Campaign scorecard — is link building paying off?</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sc-wrap">{"".join(cards)}</div>', unsafe_allow_html=True)

@@ -1,0 +1,28 @@
+{
+  "client_name": "HelloFresh",
+  "languages": ["NL", "ES", "IT"],
+  "currency": "EUR",
+  "domains": { "NL": "hellofresh.nl", "ES": "hellofresh.es", "IT": "hellofresh.it" },
+  "gsc_properties": { "NL": "sc-domain:hellofresh.nl", "ES": "sc-domain:hellofresh.es", "IT": "sc-domain:hellofresh.it" },
+  "ga4": { "property_id": "", "property_ids": { "NL": "", "ES": "", "IT": "" } },
+  "categories": {
+    "Maaltijdbox": ["maaltijdbox", "foodbox", "meal-plans", "caja", "box"],
+    "Recepten": ["recipes", "recetas", "ricette", "recept"]
+  },
+  "demo_mode": false,
+  "roi": {
+    "horizon_months": 12,
+    "attribution_share": { "low": 1.0, "base": 1.0, "high": 1.0 },
+    "conversion_rate": { "low": 0.010, "base": 0.018, "high": 0.025 },
+    "value_per_conversion": 45,
+    "thresholds": { "increase_base_roi": 2.0, "increase_low_roi": 1.0, "decrease_base_roi": 1.0 },
+    "min_investment": 250,
+    "currency_symbol": "€"
+  },
+  "google_sheets": {
+    "spreadsheet_id": "1WrX8-dVW2KD8jvROruCefnXlesT2PZe1WtB_UgdkXh0",
+    "credentials_file": "seo-pagespeed-insights-352108-0a7637b209fd.json",
+    "live_tab": "Live links_{lang}",
+    "opp_tab": "Opportunities_{lang}"
+  }
+}

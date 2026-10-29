@@ -145,7 +145,7 @@ LIGHT  = "#F0F4F8"
 MID    = "#8B9BB4"
 WHITE  = "#FFFFFF"
 CHART_COLORS = [PINK, NAVY, TEAL, "#FF7043", "#7B1FA2"]
-FLAGS = {"NL": "🇳🇱", "EN": "🇬🇧", "DE": "🇩🇪", "FR": "🇫🇷", "ES": "🇪🇸"}
+FLAGS = {"NL": "🇳🇱", "EN": "🇬🇧", "DE": "🇩🇪", "FR": "🇫🇷", "ES": "🇪🇸", "IT": "🇮🇹"}
 
 # ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
@@ -153,31 +153,55 @@ st.markdown(f"""
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
 html, body, [class*="css"] {{ font-family: 'Roboto', sans-serif; }}
 
-#MainMenu, footer, header {{ visibility: hidden; }}
-.block-container {{ padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1400px; }}
+#MainMenu, footer {{ visibility: hidden; }}
+[data-testid="stDecoration"] {{ display: none; }}
+.block-container {{ padding-top: 1rem; padding-bottom: 2rem; max-width: 1400px; }}
 
+/* Header: compact, one line */
 .dash-header {{
     background: linear-gradient(120deg, {NAVY} 0%, #2A4080 55%, #8B1060 100%);
-    padding: 1.5rem 2rem; border-radius: 12px; margin-bottom: 1.5rem;
+    padding: 0.9rem 1.4rem; border-radius: 14px; margin-bottom: 1rem;
     display: flex; justify-content: space-between; align-items: center;
 }}
-.dash-header h1 {{ color: white; margin: 0; font-size: 1.7rem; font-weight: 700; }}
-.dash-header .sub {{ color: rgba(255,255,255,0.68); font-size: 0.87rem; margin-top: 0.3rem; }}
+.dash-header h1 {{ color: white; margin: 0; padding: 0; font-size: 1.35rem; font-weight: 700; }}
+.dash-header .sub {{ color: rgba(255,255,255,0.72); font-size: 0.82rem; margin-top: 0.15rem; }}
 .artefact-pill {{
     background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.28);
-    color: white; padding: 0.35rem 1.1rem; border-radius: 20px;
-    font-size: 0.82rem; font-weight: 600; letter-spacing: 0.5px;
+    color: white; padding: 0.3rem 1rem; border-radius: 20px;
+    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.5px;
 }}
 
+/* Section titles: one calm accent bar instead of underlines */
 .section-title {{
-    color: {NAVY}; font-weight: 700; font-size: 1rem;
-    margin: 1.2rem 0 0.8rem; padding-bottom: 0.4rem;
-    border-bottom: 2px solid {PINK}; display: inline-block;
+    color: {NAVY}; font-weight: 700; font-size: 1.05rem;
+    margin: 1.4rem 0 0.7rem; padding-left: 0.65rem; border-left: 4px solid {PINK}; display: block;
 }}
+.section-hint {{ color: {MID}; font-size: 0.85rem; margin: -0.4rem 0 0.8rem 0.85rem; }}
+
+/* KPI tiles = white cards */
+[data-testid="stMetric"] {{
+    background: {WHITE}; border: 1px solid #E8ECF2; border-radius: 12px; padding: 0.75rem 1rem;
+    box-shadow: 0 1px 6px rgba(27,45,91,0.05);
+}}
+[data-testid="stMetricLabel"] p {{ color: {MID}; font-size: 0.78rem; text-transform: uppercase; letter-spacing: .5px; }}
+[data-testid="stMetricValue"] {{ color: {NAVY}; font-weight: 700; }}
+
+/* Main navigation tabs */
+[data-baseweb="tab-list"] {{ gap: 0.2rem; border-bottom: 1px solid #DDE3EC; }}
+button[role="tab"] {{ padding: 0.65rem 1.1rem; font-weight: 600; }}
+button[role="tab"][aria-selected="true"] {{ color: {PINK}; }}
+[data-baseweb="tab-highlight"] {{ background-color: {PINK}; height: 3px; }}
+
+/* Data-connection chips */
+.status-strip {{ display: flex; flex-wrap: wrap; gap: .5rem; margin: .2rem 0 .9rem; align-items: center; }}
+.chip {{ font-size: .78rem; padding: .25rem .7rem; border-radius: 999px; border: 1px solid #DDE3EC; background: {WHITE}; color: {NAVY}; }}
+.chip.ok {{ border-color: #BFE5CF; background: #EEF9F2; }}
+.chip.todo {{ border-color: #F2D9A6; background: #FFF8E8; }}
+.chip small {{ color: {MID}; }}
 
 .lang-card {{
-    background: {LIGHT}; border-radius: 8px; padding: 0.85rem 1rem;
-    margin-bottom: 0.65rem; border-left: 3px solid {PINK};
+    background: {WHITE}; border: 1px solid #E8ECF2; border-radius: 10px; padding: 0.8rem 1rem;
+    margin-bottom: 0.6rem; border-left: 3px solid {PINK};
 }}
 .lang-name {{ font-weight: 600; color: {NAVY}; font-size: 0.95rem; }}
 .lang-cost {{ color: {PINK}; font-size: 1.1rem; font-weight: 700; }}
@@ -191,7 +215,6 @@ html, body, [class*="css"] {{ font-family: 'Roboto', sans-serif; }}
     text-align: center; color: {MID}; font-size: 0.72rem;
     margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid #E8ECF2;
 }}
-[data-testid="stMetric"] {{ border-left: 3px solid {PINK}; padding-left: 0.8rem; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -227,8 +250,9 @@ def load_config() -> dict:
     raw = raw or os.getenv("CLIENT_CONFIG_JSON", "")
     if raw:
         return json.loads(raw)
-    if os.path.exists("config.json"):
-        with open("config.json", encoding="utf-8") as f:
+    cfg_path = os.getenv("CONFIG_FILE", "config.json")      # e.g. clients/hellofresh.json for local testing
+    if os.path.exists(cfg_path):
+        with open(cfg_path, encoding="utf-8") as f:
             return json.load(f)
     return {"client_name": "Client", "languages": ["NL", "EN", "DE"], "currency": "EUR"}
 
@@ -246,10 +270,23 @@ _sheet_id = config.get("google_sheets", {}).get("spreadsheet_id", "")
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown(f"<div style='font-size:1.3rem;font-weight:700;color:{NAVY};'>Artefact</div>", unsafe_allow_html=True)
-    st.markdown(f"<div style='font-size:0.75rem;color:{MID};margin-bottom:1rem;'>Linkbuilding Dashboard</div>", unsafe_allow_html=True)
-    st.divider()
+    st.markdown(f"<div style='font-size:1.25rem;font-weight:700;color:{NAVY};line-height:1.1'>Artefact</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:0.75rem;color:{MID};margin-bottom:.6rem;'>Linkbuilding ROI dashboard</div>", unsafe_allow_html=True)
+    _sb_filters, _sb_setup = st.tabs(["🔍 Filters", "⚙️ Set-up"])
+    # Filters first (what a client touches); everything technical lives under Set-up (analyst).
+    _sb_filters.__enter__()
+    # — Filters
+    current_year = datetime.now().year
+    year_opts = list(range(current_year - 1, current_year + 2))
+    selected_year = st.selectbox("Year", year_opts, index=year_opts.index(current_year))
+    selected_quarter = st.selectbox("Quarter", ["All", "Q1", "Q2", "Q3", "Q4"])
+    campaign_filter = st.text_input("Campaign", placeholder="e.g. Paid linkbuilding")
 
+
+    # — ROI assumptions (generic ROI & budget-advice module)
+    roi_assumptions = sidebar_assumptions(config)
+    _sb_filters.__exit__(None, None, None)
+    _sb_setup.__enter__()
     # — Data source
     st.markdown("**📂 Data source**")
     demo_mode = st.toggle(
@@ -284,22 +321,6 @@ with st.sidebar:
         else:
             excel_source = None
 
-    st.divider()
-
-    # — Filters
-    st.markdown("**🔍 Filters**")
-    current_year = datetime.now().year
-    year_opts = list(range(current_year - 1, current_year + 2))
-    selected_year = st.selectbox("Year", year_opts, index=year_opts.index(current_year))
-    selected_quarter = st.selectbox("Quarter", ["All", "Q1", "Q2", "Q3", "Q4"])
-    campaign_filter = st.text_input("Campaign", placeholder="e.g. Paid linkbuilding")
-
-    st.divider()
-
-    # — ROI assumptions (generic ROI & budget-advice module)
-    roi_assumptions = sidebar_assumptions(config)
-
-    st.divider()
 
     # — APIs
     st.markdown("**🔌 API connections**")
@@ -363,7 +384,6 @@ with st.sidebar:
             for _l in LANGUAGES:
                 ga4_csvs[_l] = st.file_uploader(f"GA4 export {_l}", type=["csv"], key=f"ga4csv_{_l}")
 
-    st.divider()
 
     # — Share
     st.markdown("**🔗 Share this dashboard**")
@@ -402,6 +422,7 @@ Works as long as you are on the same network.
 
     st.divider()
     st.caption(f"Client: **{CLIENT}**  \nGenerated: {datetime.now().strftime('%d-%m-%Y %H:%M')}")
+    _sb_setup.__exit__(None, None, None)
 
 
 # ── Guard: no data ─────────────────────────────────────────────────────────────
@@ -428,7 +449,7 @@ for lang in LANGUAGES:
     if demo_mode:
         raw = demo_data.demo_live_links(lang, selected_year)
     elif use_sheets:
-        raw = load_live_links_sheets(_creds_file, _sheet_id, lang)
+        raw = load_live_links_sheets(_creds_file, _sheet_id, lang, config.get("google_sheets", {}).get("live_tab", ""))
     else:
         raw = load_live_links(excel_source, lang)
     raw_links[lang] = raw   # unfiltered: growth analysis needs the FIRST link ever to a page
@@ -437,7 +458,7 @@ for lang in LANGUAGES:
     if demo_mode:
         opp_data[lang] = demo_data.demo_opportunities(lang)
     elif use_sheets:
-        opp_data[lang] = load_opportunities_sheets(_creds_file, _sheet_id, lang)
+        opp_data[lang] = load_opportunities_sheets(_creds_file, _sheet_id, lang, config.get("google_sheets", {}).get("opp_tab", ""))
     else:
         opp_data[lang] = load_opportunities(excel_source, lang)
 
@@ -517,6 +538,23 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# Answer first: scorecard (filled further down, once ROI / growth / ranking exist), then what is connected.
+scorecard_box = st.container()
+
+
+def _chip(ok: bool, label: str, unlocks: str = "") -> str:
+    tail = f" <small>· {unlocks}</small>" if (unlocks and not ok) else ""
+    return f'<span class="chip {"ok" if ok else "todo"}">{"✓" if ok else "○"} {label}{tail}</span>'
+
+
+_ga4_ok = bool(any(not d.empty for d in ga4_data.values()))
+st.markdown('<div class="status-strip">'
+            + _chip(True, "Links & costs", "")
+            + _chip(bool(ahrefs_key) or demo_mode, "Ahrefs rankings", "add API key")
+            + _chip(_ga4_ok or demo_mode, "GA4 revenue", "unlocks real ROI, growth, referral visitors")
+            + _chip(bool(demo_mode or not gsc_df.empty), "Search Console", "unlocks click & position trend")
+            + '</div>', unsafe_allow_html=True)
+
 
 # ── Global KPIs ────────────────────────────────────────────────────────────────
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -584,7 +622,9 @@ def _ahrefs_monthly_traffic(api_key: str, urls: tuple) -> float:
 
 
 _ahrefs_monthly = {}
-if ahrefs_key and not demo_mode and gsc_df.empty and not any(not d.empty for d in ga4_data.values()):
+_est_possible = bool(ahrefs_key and not demo_mode and gsc_df.empty and not any(not d.empty for d in ga4_data.values()))
+# Opt-in: the estimate needs one Ahrefs request per landing page (slow the first time), so the page loads fast without it.
+if _est_possible and st.session_state.get("ahrefs_est"):
     with st.spinner("Estimating organic traffic via Ahrefs..."):
         for _lang in LANGUAGES:
             _df = live_data.get(_lang, pd.DataFrame())
@@ -592,8 +632,15 @@ if ahrefs_key and not demo_mode and gsc_df.empty and not any(not d.empty for d i
                 _ahrefs_monthly[_lang] = _ahrefs_monthly_traffic(
                     ahrefs_key, tuple(sorted(_df["Link to"].dropna().unique())))
 
-scorecard_box = st.container()   # filled below, once ROI / growth / ranking results exist
 
+tabs_main = st.tabs(["💶 Return on investment", "📈 Results", "🌍 Reach (referral & mentions)",
+                     "🔗 Links & health", "🔬 Page deep-dive"])
+tabs_main[0].__enter__()
+if _est_possible and not st.session_state.get("ahrefs_est"):
+    st.info("💡 No revenue data yet (waiting for GA4). You can get an **indicative** return based on the Ahrefs traffic "
+            "estimate of the linked pages. It takes about a minute the first time and uses Ahrefs API units.")
+    st.button("▶ Estimate return from Ahrefs traffic", key="ahrefs_est_btn",
+              on_click=lambda: st.session_state.update(ahrefs_est=True))
 roi_total = render_roi_section(
     client=CLIENT,
     period_label=f"{selected_year} · {quarter_label}",
@@ -609,7 +656,10 @@ roi_total = render_roi_section(
     flags=FLAGS,
 )
 
+tabs_main[0].__exit__(None, None, None)
+
 # ── Revenue growth on linked pages (per URL / category / domain) ────────────────
+tabs_main[1].__enter__()
 growth_headline = render_growth_section(
     per_lang={lang: {"monthly": monthly_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
     categories=config.get("categories"),
@@ -630,19 +680,23 @@ ranking_result = render_ranking_section(
     flags=FLAGS,
 )
 
+tabs_main[1].__exit__(None, None, None)
+
 # ── Referral visitors + brand mentions (side effects of the campaign) ───────────
+tabs_main[2].__enter__()
 render_referral_section(
     per_lang={lang: {"referral": referral_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
     flags=FLAGS, demo_mode=demo_mode,
 )
 render_citations_section(raw_links, FLAGS, demo_mode)
-render_health_section(raw_links, FLAGS, demo_mode)
+tabs_main[2].__exit__(None, None, None)
 
 with scorecard_box:
     render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode)
 
 
 # ── Overview: links per language + costs ───────────────────────────────────────
+tabs_main[3].__enter__()
 st.markdown('<div class="section-title">Overview by language</div>', unsafe_allow_html=True)
 col_chart, col_cards = st.columns([3, 1])
 
@@ -937,6 +991,9 @@ if broken_links > 0 and "Status code" in all_live.columns:
     broken_df = all_live[~all_live["Status code"].isin([200])][show_cols]
     st.dataframe(broken_df, width="stretch", hide_index=True)
 
+render_health_section(raw_links, FLAGS, demo_mode)
+tabs_main[3].__exit__(None, None, None)
+
 
 # ── Impact analysis ────────────────────────────────────────────────────────────
 # Fragment: choosing another landing page / period only reruns THIS block, not the whole dashboard.
@@ -1159,7 +1216,9 @@ def render_impact_analysis():
                     )
 
 
+tabs_main[4].__enter__()
 render_impact_analysis()
+tabs_main[4].__exit__(None, None, None)
 
 
 # ── Footer ─────────────────────────────────────────────────────────────────────
