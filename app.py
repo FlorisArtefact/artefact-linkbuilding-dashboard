@@ -177,6 +177,17 @@ AXIS_NO_GRID = dict(showgrid=False, zeroline=False)
 # ── Load config ────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_config() -> dict:
+    # Multi-client hosting: each deployed app carries its OWN client config in its secrets
+    # (CLIENT_CONFIG_JSON = the content of that client's config.json). That keeps client names,
+    # sheet IDs and domains out of the repo, so one codebase can serve many isolated apps.
+    raw = ""
+    try:
+        raw = st.secrets.get("CLIENT_CONFIG_JSON", "")
+    except Exception:
+        pass
+    raw = raw or os.getenv("CLIENT_CONFIG_JSON", "")
+    if raw:
+        return json.loads(raw)
     if os.path.exists("config.json"):
         with open("config.json", encoding="utf-8") as f:
             return json.load(f)
