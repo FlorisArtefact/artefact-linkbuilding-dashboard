@@ -44,9 +44,9 @@ def sidebar_assumptions(config: dict) -> dict:
                    "(rest = content, technique, brand, seasonality)?")
         c1, c2, c3 = st.columns(3)
         shares = sorted([
-            c1.number_input("Low %", 1, 90, int(round(a["attribution_share"]["low"] * 100)), key="roi_sh_low"),
-            c2.number_input("Real. %", 1, 90, int(round(a["attribution_share"]["base"] * 100)), key="roi_sh_base"),
-            c3.number_input("High %", 1, 90, int(round(a["attribution_share"]["high"] * 100)), key="roi_sh_high"),
+            c1.number_input("Low %", 1, 100,int(round(a["attribution_share"]["low"] * 100)), key="roi_sh_low"),
+            c2.number_input("Real. %", 1, 100,int(round(a["attribution_share"]["base"] * 100)), key="roi_sh_base"),
+            c3.number_input("High %", 1, 100,int(round(a["attribution_share"]["high"] * 100)), key="roi_sh_high"),
         ])
         a["attribution_share"] = {"low": shares[0] / 100, "base": shares[1] / 100, "high": shares[2] / 100}
         st.markdown("**Only if there is no GA4 revenue** (traffic mode)")
@@ -95,11 +95,15 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
     adv = total["advice"]
 
     tiles = ""
+    # With revenue as basis and the same credited share in every scenario the three tiles would be identical
+    same = total["mode"] == "revenue" and len({round(total["scenarios"][s]["share"], 4) for s in SCENARIOS}) == 1
     if total["mode"] is not None:
-        for s in SCENARIOS:
+        for s in (("base",) if same else SCENARIOS):
             r = total["scenarios"][s]
             cls = "roi-tile base" if s == "base" else "roi-tile"
-            tiles += (f'<div class="{cls}"><div class="lab">{SCENARIO_LABELS[s]} · {r["share"]:.0%} credited to links</div>'
+            lab = (f'Return · {r["share"]:.0%} of page revenue credited to links' if same
+                   else f'{SCENARIO_LABELS[s]} · {r["share"]:.0%} credited to links')
+            tiles += (f'<div class="{cls}"><div class="lab">{lab}</div>'
                       f'<div class="big">{_roi_txt(r["roi"])}</div>'
                       f'<div class="sub">value {_money(a, r["value"])} · net {_money(a, r["net"])}</div></div>')
         pay = total["scenarios"]["base"]["payback_months"]
@@ -132,9 +136,9 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
             fig = go.Figure()
             fig.add_trace(go.Bar(x=["Investment"], y=[total["investment"]], marker_color=PINK, name="Investment",
                                  text=[_money(a, total["investment"])], textposition="outside"))
-            for s in SCENARIOS:
+            for s in (("base",) if same else SCENARIOS):
                 v = total["scenarios"][s]["value"]
-                fig.add_trace(go.Bar(x=[SCENARIO_LABELS[s] + " scenario"], y=[v], marker_color=SCEN_COLORS[s],
+                fig.add_trace(go.Bar(x=["Revenue on linked pages" if same else SCENARIO_LABELS[s] + " scenario"], y=[v], marker_color=SCEN_COLORS[s],
                                      name=SCENARIO_LABELS[s], text=[_money(a, v)], textposition="outside"))
             fig.add_hline(y=total["investment"], line=dict(color=PINK, width=1.5, dash="dash"),
                           annotation_text="break-even", annotation_position="top left",
