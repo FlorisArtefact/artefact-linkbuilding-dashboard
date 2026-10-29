@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 import streamlit as st
 import pandas as pd
@@ -81,10 +83,11 @@ class AhrefsClient:
         keywords, est_traffic.
         """
         records = []
-        for i in range(months):
-            snapshot_dt = datetime.now() - timedelta(days=30 * i)
-            snapshot_date = snapshot_dt.strftime("%Y-%m-%d")
-            keywords = self.get_url_keywords_at_date(url, snapshot_date)
+        # The monthly snapshots are independent -> fetch them in parallel (was sequential: ~6x slower)
+        dates = [(datetime.now() - timedelta(days=30 * i)).strftime("%Y-%m-%d") for i in range(months)]
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            kw_lists = list(pool.map(lambda d: self.get_url_keywords_at_date(url, d), dates))
+        for snapshot_date, keywords in zip(dates, kw_lists):
             if keywords:
                 positions = [kw["best_position"] for kw in keywords if kw.get("best_position")]
                 traffic = sum(kw.get("sum_traffic", 0) for kw in keywords)
@@ -110,6 +113,23 @@ class AhrefsClient:
         df = pd.DataFrame(records).sort_values("date").reset_index(drop=True)
         return df
 
+    def get_snapshot_history(self, url: str, months: int = 6) -> pd.DataFrame:
+        """Monthly snapshots (months+1 points, oldest first): avg position, keyword count, top-10 count, est. traffic.
+        Reuses the cached keyword snapshots of get_position_history."""
+        rows = []
+        snaps = [(datetime.now() - timedelta(days=30 * i)).strftime("%Y-%m-%d") for i in range(months + 1)]
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            kw_lists = list(pool.map(lambda d: self.get_url_keywords_at_date(url, d), snaps))
+        for snap, kws in zip(snaps, kw_lists):
+            pos = [k["best_position"] for k in kws if k.get("best_position")]
+            rows.append({
+                "date": pd.to_datetime(snap),
+                "avg_position": round(sum(pos) / len(pos), 1) if pos else None,
+                "keywords": len(pos), "top10": sum(1 for p in pos if p <= 10),
+                "est_traffic": sum(k.get("sum_traffic", 0) or 0 for k in kws),
+            })
+        return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+
     def get_landing_page_metrics(self, url: str) -> dict:
         keywords = self.get_url_keywords(url)
         if not keywords:
@@ -124,4 +144,5 @@ class AhrefsClient:
         }
 
     def enrich_landing_pages(self, urls: list) -> dict:
-        return {url: self.get_landing_page_metrics(url) for url in urls}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            return dict(zip(urls, pool.map(self.get_landing_page_metrics, urls)))

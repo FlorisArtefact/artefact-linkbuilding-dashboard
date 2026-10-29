@@ -26,9 +26,14 @@ from modules.ga4_client import (
     ga4_available,
     get_ga4_property_id,
     get_monthly_revenue_by_page,
+    get_referral_traffic,
     load_ga4_csv,
 )
+from modules.citations_ui import render_citations_section
+from modules.referral_ui import render_referral_section
 from modules.growth_ui import render_growth_section
+from modules.ranking_ui import render_ranking_section
+from modules.scorecard_ui import render_scorecard
 from modules.sheets_loader import (
     load_live_links_sheets,
     load_opportunities_sheets,
@@ -46,6 +51,38 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ── Optional "Sign in with Google" gate with an e-mail allow-list (per app) ─────
+def _check_login():
+    """Returns None when not configured (the password gate below then applies).
+    Configure in the app's secrets: an [auth] block (redirect_uri, cookie_secret, client_id, client_secret,
+    server_metadata_url) plus ALLOWED_EMAILS = ["person@client.nl", "@client.nl"] ("@domain" allows a whole domain)."""
+    try:
+        allowed = [str(e).strip().lower() for e in st.secrets.get("ALLOWED_EMAILS", [])]
+        configured = bool(allowed) and "auth" in st.secrets
+    except Exception:
+        return None
+    if not configured:
+        return None
+    if not getattr(st.user, "is_logged_in", False):
+        st.markdown("""<style>#MainMenu, footer, header {visibility: hidden;}</style>
+        <div style="max-width:420px;margin:10vh auto 1rem;padding:2rem;border-radius:14px;background:white;
+        box-shadow:0 4px 24px rgba(27,45,91,.12);border-top:4px solid #E5007D">
+        <div style="color:#1B2D5B;font-size:1.4rem;font-weight:700">🔗 Linkbuilding Dashboard</div>
+        <div style="color:#8B9BB4;font-size:.9rem">Sign in with your Google account to continue</div></div>""",
+                    unsafe_allow_html=True)
+        left, mid, right = st.columns([1, 1, 1])
+        with mid:
+            st.button("Sign in with Google", on_click=st.login, type="primary", width="stretch")
+        return False
+    email = str(st.user.get("email", "") or "").strip().lower()
+    ok = bool(st.user.get("email_verified", True)) and any(
+        email == a or (a.startswith("@") and email.endswith(a)) for a in allowed)
+    if not ok:
+        st.error(f"{email or 'This account'} does not have access to this dashboard.")
+        st.button("Sign out", on_click=st.logout)
+    return ok
+
 
 # ── Password gate ──────────────────────────────────────────────────────────────
 def _check_password() -> bool:
@@ -95,7 +132,8 @@ def _check_password() -> bool:
             st.error("Incorrect password — please try again.")
     return False
 
-if not _check_password():
+_login_ok = _check_login()
+if _login_ok is False or (_login_ok is None and not _check_password()):
     st.stop()
 
 # ── Brand colors ───────────────────────────────────────────────────────────────
@@ -421,9 +459,10 @@ else:
     gsc_df = load_gsc_csv(gsc_csv) if gsc_csv else pd.DataFrame()
 
 # ── GA4 revenue & conversions per language ──────────────────────────────────────
-ga4_data, monthly_data = {}, {}
+ga4_data, monthly_data, referral_data = {}, {}, {}
 if demo_mode:
     use_ga4 = True
+    referral_data = {lang: demo_data.demo_referral(lang, raw_links.get(lang)) for lang in LANGUAGES}
     ga4_data = {lang: demo_data.demo_ga4(lang) for lang in LANGUAGES}
     monthly_data = {lang: demo_data.demo_monthly(lang, raw_links.get(lang)) for lang in LANGUAGES}
 elif use_ga4:
@@ -433,6 +472,10 @@ elif use_ga4:
         _shared = not config.get("ga4", {}).get("property_ids", {}).get(lang)
         ga4_data[lang] = (
             get_revenue_by_page(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "")
+            if prop_id else pd.DataFrame()
+        )
+        referral_data[lang] = (
+            get_referral_traffic(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "")
             if prop_id else pd.DataFrame()
         )
         monthly_data[lang] = (
@@ -548,7 +591,9 @@ if ahrefs_key and not demo_mode and gsc_df.empty and not any(not d.empty for d i
                 _ahrefs_monthly[_lang] = _ahrefs_monthly_traffic(
                     ahrefs_key, tuple(sorted(_df["Link to"].dropna().unique())))
 
-render_roi_section(
+scorecard_box = st.container()   # filled below, once ROI / growth / ranking results exist
+
+roi_total = render_roi_section(
     client=CLIENT,
     period_label=f"{selected_year} · {quarter_label}",
     per_lang={
@@ -564,13 +609,35 @@ render_roi_section(
 )
 
 # ── Revenue growth on linked pages (per URL / category / domain) ────────────────
-render_growth_section(
+growth_headline = render_growth_section(
     per_lang={lang: {"monthly": monthly_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
     categories=config.get("categories"),
     currency="€",
     flags=FLAGS,
     demo_mode=demo_mode,
 )
+
+# ── Rankings of ALL pages that received links, per market ───────────────────────
+ranking_result = render_ranking_section(
+    per_lang={
+        lang: {"urls": sorted(u for u in raw_links.get(lang, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).dropna().unique()
+                              if str(u).strip())}
+        for lang in LANGUAGES
+    },
+    api_key=ahrefs_key,
+    demo_mode=demo_mode,
+    flags=FLAGS,
+)
+
+# ── Referral visitors + brand mentions (side effects of the campaign) ───────────
+render_referral_section(
+    per_lang={lang: {"referral": referral_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
+    flags=FLAGS, demo_mode=demo_mode,
+)
+render_citations_section(raw_links, FLAGS, demo_mode)
+
+with scorecard_box:
+    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode)
 
 
 # ── Overview: links per language + costs ───────────────────────────────────────
@@ -870,221 +937,227 @@ if broken_links > 0 and "Status code" in all_live.columns:
 
 
 # ── Impact analysis ────────────────────────────────────────────────────────────
-st.divider()
-ia_title_col, ia_info_col = st.columns([5, 1])
-with ia_title_col:
-    st.markdown('<div class="section-title">📈 Impact analysis: ranking over time</div>', unsafe_allow_html=True)
+# Fragment: choosing another landing page / period only reruns THIS block, not the whole dashboard.
+@st.fragment
+def render_impact_analysis():
+    st.divider()
+    ia_title_col, ia_info_col = st.columns([5, 1])
+    with ia_title_col:
+        st.markdown('<div class="section-title">📈 Impact analysis: ranking over time</div>', unsafe_allow_html=True)
 
-with st.expander("ℹ️ How does this chart work?", expanded=False):
-    st.markdown(f"""
-**Purpose:** Shows whether placed backlinks are actually improving the organic ranking of a landing page.
+    with st.expander("ℹ️ How does this chart work?", expanded=False):
+        st.markdown(f"""
+    **Purpose:** Shows whether placed backlinks are actually improving the organic ranking of a landing page.
 
-**How to read the chart:**
-- The **blue line** shows the average organic position of the landing page over time (source: Ahrefs).
-  *Higher on the chart = better ranking (position 1 is at the top).*
-- The **pink dashed lines** mark the exact date a backlink to this page was placed.
-- The **background colours** indicate ranking quality:
-  - 🟩 Green = Top 3 (excellent)
-  - 🟨 Yellow = Top 10 (good)
-  - 🟧 Orange = Position 11–20 (fair)
-  - 🟥 Red = Outside top 20 (needs improvement)
+    **How to read the chart:**
+    - The **blue line** shows the average organic position of the landing page over time (source: Ahrefs).
+      *Higher on the chart = better ranking (position 1 is at the top).*
+    - The **pink dashed lines** mark the exact date a backlink to this page was placed.
+    - The **background colours** indicate ranking quality:
+      - 🟩 Green = Top 3 (excellent)
+      - 🟨 Yellow = Top 10 (good)
+      - 🟧 Orange = Position 11–20 (fair)
+      - 🟥 Red = Outside top 20 (needs improvement)
 
-**How it works technically:**
-Ahrefs stores monthly snapshots of all organic rankings.
-This dashboard fetches those historical snapshots and calculates the average position per month.
-You can directly see whether a link placed in month X leads to a ranking improvement in month X+1 or X+2.
+    **How it works technically:**
+    Ahrefs stores monthly snapshots of all organic rankings.
+    This dashboard fetches those historical snapshots and calculates the average position per month.
+    You can directly see whether a link placed in month X leads to a ranking improvement in month X+1 or X+2.
 
-**Note:** Link building typically takes 4–12 weeks before its effect becomes visible in rankings.
-""")
+    **Note:** Link building typically takes 4–12 weeks before its effect becomes visible in rankings.
+    """)
 
-st.caption("Select a landing page to visualise the ranking impact of placed backlinks.")
+    st.caption("Select a landing page to visualise the ranking impact of placed backlinks.")
 
-all_lp_options = []
-for lang in LANGUAGES:
-    df_lang = live_data.get(lang, pd.DataFrame())
-    if not df_lang.empty and "Link to" in df_lang.columns:
-        for url in df_lang["Link to"].dropna().unique():
-            all_lp_options.append({"url": url, "lang": lang})
+    all_lp_options = []
+    for lang in LANGUAGES:
+        df_lang = live_data.get(lang, pd.DataFrame())
+        if not df_lang.empty and "Link to" in df_lang.columns:
+            for url in df_lang["Link to"].dropna().unique():
+                all_lp_options.append({"url": url, "lang": lang})
 
-if not all_lp_options:
-    st.info("No landing pages available for analysis. Upload the Excel database.")
-else:
-    ia_col1, ia_col2, ia_col3 = st.columns([1, 3, 1])
-    with ia_col1:
-        ia_lang = st.selectbox("Language", LANGUAGES, key="ia_lang")
-    with ia_col2:
-        lang_lp = [item["url"] for item in all_lp_options if item["lang"] == ia_lang]
-        if lang_lp:
-            ia_url = st.selectbox("Landing page", lang_lp, key="ia_url")
-        else:
-            st.info(f"No landing pages available for {ia_lang}.")
-            ia_url = None
-    with ia_col3:
-        ia_months = st.slider("Months back", min_value=3, max_value=12, value=6, key="ia_months")
+    if not all_lp_options:
+        st.info("No landing pages available for analysis. Upload the Excel database.")
+    else:
+        ia_col1, ia_col2, ia_col3 = st.columns([1, 3, 1])
+        with ia_col1:
+            ia_lang = st.selectbox("Language", LANGUAGES, key="ia_lang")
+        with ia_col2:
+            lang_lp = [item["url"] for item in all_lp_options if item["lang"] == ia_lang]
+            if lang_lp:
+                ia_url = st.selectbox("Landing page", lang_lp, key="ia_url")
+            else:
+                st.info(f"No landing pages available for {ia_lang}.")
+                ia_url = None
+        with ia_col3:
+            ia_months = st.slider("Months back", min_value=3, max_value=12, value=6, key="ia_months")
 
-    if ia_url:
-        ia_events = pd.concat(
-            [df for df in live_data.values() if not df.empty], ignore_index=True
-        ) if any(not d.empty for d in live_data.values()) else pd.DataFrame()
+        if ia_url:
+            ia_events = pd.concat(
+                [df for df in live_data.values() if not df.empty], ignore_index=True
+            ) if any(not d.empty for d in live_data.values()) else pd.DataFrame()
 
-        if not ia_events.empty and "Link to" in ia_events.columns:
-            ia_events = ia_events[ia_events["Link to"] == ia_url].copy()
-        else:
-            ia_events = pd.DataFrame()
+            if not ia_events.empty and "Link to" in ia_events.columns:
+                ia_events = ia_events[ia_events["Link to"] == ia_url].copy()
+            else:
+                ia_events = pd.DataFrame()
 
-        # GSC position history (from uploaded CSV)
-        gsc_history = pd.DataFrame()
-        if not gsc_df.empty and "Page" in gsc_df.columns and "Avg Position" in gsc_df.columns:
-            gsc_page = gsc_df[gsc_df["Page"] == ia_url].copy()
-            if "Date" in gsc_df.columns or "date" in gsc_df.columns:
-                date_col    = "Date" if "Date" in gsc_df.columns else "date"
-                gsc_history = gsc_page[[date_col, "Avg Position"]].copy()
-                gsc_history.columns = ["date", "gsc_position"]
-                gsc_history["date"] = pd.to_datetime(gsc_history["date"], errors="coerce")
-                gsc_history = gsc_history.dropna().sort_values("date")
+            # GSC position history (from uploaded CSV)
+            gsc_history = pd.DataFrame()
+            if not gsc_df.empty and "Page" in gsc_df.columns and "Avg Position" in gsc_df.columns:
+                gsc_page = gsc_df[gsc_df["Page"] == ia_url].copy()
+                if "Date" in gsc_df.columns or "date" in gsc_df.columns:
+                    date_col    = "Date" if "Date" in gsc_df.columns else "date"
+                    gsc_history = gsc_page[[date_col, "Avg Position"]].copy()
+                    gsc_history.columns = ["date", "gsc_position"]
+                    gsc_history["date"] = pd.to_datetime(gsc_history["date"], errors="coerce")
+                    gsc_history = gsc_history.dropna().sort_values("date")
 
-        # Ahrefs position history (monthly snapshots)
-        ahrefs_history = pd.DataFrame()
-        if demo_mode:
-            ahrefs_history = demo_data.demo_position_history(ia_url, ia_months)
-        elif ahrefs_client:
-            cache_key = f"pos_hist_{ia_url}_{ia_months}"
-            if cache_key not in st.session_state:
-                short = ia_url.rstrip("/").split("/")[-1] or ia_url
-                with st.spinner(f"Ahrefs: fetching {ia_months} monthly snapshots for {short}..."):
-                    st.session_state[cache_key] = ahrefs_client.get_position_history(ia_url, ia_months)
-            ahrefs_history = st.session_state[cache_key]
+            # Ahrefs position history (monthly snapshots)
+            ahrefs_history = pd.DataFrame()
+            if demo_mode:
+                ahrefs_history = demo_data.demo_position_history(ia_url, ia_months)
+            elif ahrefs_client:
+                cache_key = f"pos_hist_{ia_url}_{ia_months}"
+                if cache_key not in st.session_state:
+                    short = ia_url.rstrip("/").split("/")[-1] or ia_url
+                    with st.spinner(f"Ahrefs: fetching {ia_months} monthly snapshots for {short}..."):
+                        st.session_state[cache_key] = ahrefs_client.get_position_history(ia_url, ia_months)
+                ahrefs_history = st.session_state[cache_key]
 
-        has_data = (
-            (not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any())
-            or not gsc_history.empty
-        )
-
-        if not has_data:
-            st.warning(
-                "No historical position data available. "
-                "Upload a GSC export with the date dimension enabled, or check the Ahrefs API connection."
+            has_data = (
+                (not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any())
+                or not gsc_history.empty
             )
-        else:
-            short_label = "/" + "/".join(ia_url.rstrip("/").split("/")[-2:])
-            fig_impact  = go.Figure()
 
-            y_max = 60
-            if not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any():
-                y_max = max(60, ahrefs_history["avg_position"].dropna().max() * 1.3)
-            if not gsc_history.empty:
-                y_max = max(y_max, gsc_history["gsc_position"].max() * 1.3)
-
-            fig_impact.add_hrect(y0=1,  y1=3,     fillcolor="#C8E6C9", opacity=0.25, line_width=0)
-            fig_impact.add_hrect(y0=3,  y1=10,    fillcolor="#FFF9C4", opacity=0.25, line_width=0)
-            fig_impact.add_hrect(y0=10, y1=20,    fillcolor="#FFE0B2", opacity=0.2,  line_width=0)
-            fig_impact.add_hrect(y0=20, y1=y_max, fillcolor="#FFCCCC", opacity=0.15, line_width=0)
-
-            for pos, label, color in [
-                (2, "Top 3",           "#2E7D32"),
-                (6.5, "Top 10",        "#F57F17"),
-                (15, "Top 20",         "#E65100"),
-                (35, "Outside top 20", "#B71C1C"),
-            ]:
-                if pos < y_max:
-                    fig_impact.add_annotation(
-                        x=1, xref="paper", y=pos, text=label,
-                        showarrow=False, font=dict(size=9, color=color),
-                        xanchor="right", yanchor="middle",
-                    )
-
-            if not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any():
-                fig_impact.add_trace(go.Scatter(
-                    x=ahrefs_history["date"],
-                    y=ahrefs_history["avg_position"],
-                    mode="lines+markers",
-                    name="Avg. position (Ahrefs)",
-                    line=dict(color=NAVY, width=2.5),
-                    marker=dict(size=7, color=NAVY, symbol="circle"),
-                    hovertemplate="<b>%{x|%b %Y}</b><br>Position: %{y:.1f}<extra></extra>",
-                ))
-
-            if not gsc_history.empty:
-                fig_impact.add_trace(go.Scatter(
-                    x=gsc_history["date"],
-                    y=gsc_history["gsc_position"],
-                    mode="lines+markers",
-                    name="Avg. position (GSC)",
-                    line=dict(color=TEAL, width=2, dash="dot"),
-                    marker=dict(size=6, color=TEAL, symbol="diamond"),
-                    hovertemplate="<b>%{x|%d %b %Y}</b><br>GSC position: %{y:.1f}<extra></extra>",
-                ))
-
-            if not ia_events.empty and "LL Date" in ia_events.columns:
-                for _, row in ia_events.dropna(subset=["LL Date"]).iterrows():
-                    ll_date = row["LL Date"]
-                    da_val  = row.get("DA", None)
-                    domain  = row.get("Domain", "")
-                    da_txt  = f"DA {int(da_val)}" if pd.notna(da_val) else ""
-                    fig_impact.add_vline(
-                        x=ll_date.timestamp() * 1000,
-                        line=dict(color=PINK, width=1.5, dash="dash"),
-                    )
-                    fig_impact.add_annotation(
-                        x=ll_date, y=0, yref="paper",
-                        text=f"🔗 {domain[:20]}<br><span style='color:{PINK}'>{da_txt}</span>",
-                        showarrow=True, arrowhead=2, arrowcolor=PINK, arrowsize=0.8,
-                        ax=0, ay=-35,
-                        font=dict(size=9, color=NAVY),
-                        bgcolor="white", bordercolor=PINK, borderwidth=1, borderpad=3,
-                    )
-
-            fig_impact.update_layout(
-                **chart_layout(f"Ranking over time: {short_label}", 450),
-                yaxis=dict(
-                    title="Average organic position",
-                    autorange="reversed",
-                    range=[y_max, 0],
-                    gridcolor="#E8ECF2",
-                    showgrid=True,
-                    zeroline=False,
-                    ticksuffix="  ",
-                ),
-                xaxis=dict(title="Date", showgrid=False, zeroline=False),
-                legend=dict(orientation="h", y=1.08, x=0, font=dict(size=11)),
-                hovermode="x unified",
-                hoverlabel=dict(bgcolor="white", font_size=11, font_family="Roboto"),
-            )
-            st.plotly_chart(fig_impact, width="stretch")
-
-            s1, s2, s3, s4 = st.columns(4)
-            if not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any():
-                valid     = ahrefs_history["avg_position"].dropna()
-                first_pos = valid.iloc[0]
-                last_pos  = valid.iloc[-1]
-                delta_pos = first_pos - last_pos
-                s1.metric("Position start of period", f"{first_pos:.1f}",
-                          help="Average organic position at the start of the selected period.")
-                s2.metric("Position now", f"{last_pos:.1f}",
-                          delta=f"{'-' if delta_pos < 0 else '+'}{abs(delta_pos):.1f}",
-                          delta_color="inverse" if delta_pos < 0 else "normal",
-                          help="Current average organic position. Green = improvement vs. start of period.")
-            if not ia_events.empty:
-                s3.metric("Backlinks built", len(ia_events),
-                          help="Number of backlinks placed to this landing page in the visible period.")
-                avg_link_da = ia_events["DA"].mean() if "DA" in ia_events.columns else None
-                if pd.notna(avg_link_da):
-                    s4.metric("Avg. DA of placed links", f"{avg_link_da:.0f}",
-                              help="Average Domain Authority of the domains that placed links. "
-                                   "Higher DA = more authority transferred to the landing page.")
-
-            if ahrefs_client:
-                if st.button("🔄 Refresh (clears cache)", key="refresh_impact"):
-                    cache_key = f"pos_hist_{ia_url}_{ia_months}"
-                    if cache_key in st.session_state:
-                        del st.session_state[cache_key]
-                    st.rerun()
-
-            if gsc_history.empty:
-                st.caption(
-                    "💡 **Tip:** Upload a GSC export with the date dimension enabled for daily position data. "
-                    "In Search Console: Performance → enable 'Date' → Export CSV."
+            if not has_data:
+                st.warning(
+                    "No historical position data available. "
+                    "Upload a GSC export with the date dimension enabled, or check the Ahrefs API connection."
                 )
+            else:
+                short_label = "/" + "/".join(ia_url.rstrip("/").split("/")[-2:])
+                fig_impact  = go.Figure()
+
+                y_max = 60
+                if not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any():
+                    y_max = max(60, ahrefs_history["avg_position"].dropna().max() * 1.3)
+                if not gsc_history.empty:
+                    y_max = max(y_max, gsc_history["gsc_position"].max() * 1.3)
+
+                fig_impact.add_hrect(y0=1,  y1=3,     fillcolor="#C8E6C9", opacity=0.25, line_width=0)
+                fig_impact.add_hrect(y0=3,  y1=10,    fillcolor="#FFF9C4", opacity=0.25, line_width=0)
+                fig_impact.add_hrect(y0=10, y1=20,    fillcolor="#FFE0B2", opacity=0.2,  line_width=0)
+                fig_impact.add_hrect(y0=20, y1=y_max, fillcolor="#FFCCCC", opacity=0.15, line_width=0)
+
+                for pos, label, color in [
+                    (2, "Top 3",           "#2E7D32"),
+                    (6.5, "Top 10",        "#F57F17"),
+                    (15, "Top 20",         "#E65100"),
+                    (35, "Outside top 20", "#B71C1C"),
+                ]:
+                    if pos < y_max:
+                        fig_impact.add_annotation(
+                            x=1, xref="paper", y=pos, text=label,
+                            showarrow=False, font=dict(size=9, color=color),
+                            xanchor="right", yanchor="middle",
+                        )
+
+                if not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any():
+                    fig_impact.add_trace(go.Scatter(
+                        x=ahrefs_history["date"],
+                        y=ahrefs_history["avg_position"],
+                        mode="lines+markers",
+                        name="Avg. position (Ahrefs)",
+                        line=dict(color=NAVY, width=2.5),
+                        marker=dict(size=7, color=NAVY, symbol="circle"),
+                        hovertemplate="<b>%{x|%b %Y}</b><br>Position: %{y:.1f}<extra></extra>",
+                    ))
+
+                if not gsc_history.empty:
+                    fig_impact.add_trace(go.Scatter(
+                        x=gsc_history["date"],
+                        y=gsc_history["gsc_position"],
+                        mode="lines+markers",
+                        name="Avg. position (GSC)",
+                        line=dict(color=TEAL, width=2, dash="dot"),
+                        marker=dict(size=6, color=TEAL, symbol="diamond"),
+                        hovertemplate="<b>%{x|%d %b %Y}</b><br>GSC position: %{y:.1f}<extra></extra>",
+                    ))
+
+                if not ia_events.empty and "LL Date" in ia_events.columns:
+                    for _, row in ia_events.dropna(subset=["LL Date"]).iterrows():
+                        ll_date = row["LL Date"]
+                        da_val  = row.get("DA", None)
+                        domain  = row.get("Domain", "")
+                        da_txt  = f"DA {int(da_val)}" if pd.notna(da_val) else ""
+                        fig_impact.add_vline(
+                            x=ll_date.timestamp() * 1000,
+                            line=dict(color=PINK, width=1.5, dash="dash"),
+                        )
+                        fig_impact.add_annotation(
+                            x=ll_date, y=0, yref="paper",
+                            text=f"🔗 {domain[:20]}<br><span style='color:{PINK}'>{da_txt}</span>",
+                            showarrow=True, arrowhead=2, arrowcolor=PINK, arrowsize=0.8,
+                            ax=0, ay=-35,
+                            font=dict(size=9, color=NAVY),
+                            bgcolor="white", bordercolor=PINK, borderwidth=1, borderpad=3,
+                        )
+
+                fig_impact.update_layout(
+                    **chart_layout(f"Ranking over time: {short_label}", 450),
+                    yaxis=dict(
+                        title="Average organic position",
+                        autorange="reversed",
+                        range=[y_max, 0],
+                        gridcolor="#E8ECF2",
+                        showgrid=True,
+                        zeroline=False,
+                        ticksuffix="  ",
+                    ),
+                    xaxis=dict(title="Date", showgrid=False, zeroline=False),
+                    legend=dict(orientation="h", y=1.08, x=0, font=dict(size=11)),
+                    hovermode="x unified",
+                    hoverlabel=dict(bgcolor="white", font_size=11, font_family="Roboto"),
+                )
+                st.plotly_chart(fig_impact, width="stretch")
+
+                s1, s2, s3, s4 = st.columns(4)
+                if not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any():
+                    valid     = ahrefs_history["avg_position"].dropna()
+                    first_pos = valid.iloc[0]
+                    last_pos  = valid.iloc[-1]
+                    delta_pos = first_pos - last_pos
+                    s1.metric("Position start of period", f"{first_pos:.1f}",
+                              help="Average organic position at the start of the selected period.")
+                    s2.metric("Position now", f"{last_pos:.1f}",
+                              delta=f"{'-' if delta_pos < 0 else '+'}{abs(delta_pos):.1f}",
+                              delta_color="inverse" if delta_pos < 0 else "normal",
+                              help="Current average organic position. Green = improvement vs. start of period.")
+                if not ia_events.empty:
+                    s3.metric("Backlinks built", len(ia_events),
+                              help="Number of backlinks placed to this landing page in the visible period.")
+                    avg_link_da = ia_events["DA"].mean() if "DA" in ia_events.columns else None
+                    if pd.notna(avg_link_da):
+                        s4.metric("Avg. DA of placed links", f"{avg_link_da:.0f}",
+                                  help="Average Domain Authority of the domains that placed links. "
+                                       "Higher DA = more authority transferred to the landing page.")
+
+                if ahrefs_client:
+                    if st.button("🔄 Refresh (clears cache)", key="refresh_impact"):
+                        cache_key = f"pos_hist_{ia_url}_{ia_months}"
+                        if cache_key in st.session_state:
+                            del st.session_state[cache_key]
+                        st.rerun()
+
+                if gsc_history.empty:
+                    st.caption(
+                        "💡 **Tip:** Upload a GSC export with the date dimension enabled for daily position data. "
+                        "In Search Console: Performance → enable 'Date' → Export CSV."
+                    )
+
+
+render_impact_analysis()
 
 
 # ── Footer ─────────────────────────────────────────────────────────────────────

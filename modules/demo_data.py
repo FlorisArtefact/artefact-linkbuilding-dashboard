@@ -53,11 +53,16 @@ def demo_live_links(lang: str, year: int) -> pd.DataFrame:
             "DA": da, "Backlink/Brand Mention": "Backlink",
             "Link Type": "Dofollow" if rng.random() > 0.05 else "Nofollow",
             "Domain": rng.choice(c["domains"]), "Link to": c["host"] + rng.choice(c["pages"]),
+            "_mention": rng.random() < 0.15,
             "Anchor text": rng.choice(c["anchors"]),
             "Price": float(round(120 + da * 4.2 + rng.randint(-40, 60), -1)),
             "Target campaign": "Paid linkbuilding" if rng.random() > 0.2 else "Digital PR",
             "Language": lang,
         })
+    for r in rows:                      # some placements are brand mentions (citation without link)
+        if r.pop("_mention"):
+            r["Backlink/Brand Mention"] = "Brand Mention"
+            r["Link to"], r["Link Type"], r["Anchor text"] = "", "n/a", ""
     return pd.DataFrame(rows)
 
 
@@ -110,6 +115,40 @@ def demo_monthly(lang: str, links: pd.DataFrame, months: int = 14) -> pd.DataFra
                 ramp = 1 + min(0.45, 0.15 * ((m.year - fl.year) * 12 + m.month - fl.month))
             rev = base * season * ramp * rng.uniform(0.9, 1.1)
             rows.append({"month": m, "path": p, "Revenue": round(rev, 2), "Sessions": round(rev / 1.6)})
+    return pd.DataFrame(rows)
+
+
+def demo_ranking_history(urls: list, months: int = 6) -> dict:
+    """Synthetic snapshot history per URL (positions improve on most pages, a few lag)."""
+    out = {}
+    now = pd.Timestamp.today().normalize()
+    for u in urls:
+        rng = random.Random(f"rk-{u}")
+        start = rng.uniform(16, 34)
+        gain = rng.uniform(-3, 12)           # a minority drift the wrong way
+        rows = []
+        for i in range(months, -1, -1):
+            prog = (months - i) / max(months, 1)
+            pos = max(1.5, start - gain * prog + rng.uniform(-1, 1))
+            kw = int(40 + 25 * prog + rng.uniform(-5, 5))
+            rows.append({"date": now - pd.Timedelta(days=30 * i), "avg_position": round(pos, 1), "keywords": kw,
+                         "top10": int(kw * max(0.02, (24 - pos) / 80)), "est_traffic": int(kw * rng.uniform(2, 5) * (1 + prog))})
+        out[u] = pd.DataFrame(rows)
+    return out
+
+
+def demo_referral(lang: str, links: pd.DataFrame) -> pd.DataFrame:
+    """Synthetic referral sessions from some of the placed links' articles (same schema as get_referral_traffic)."""
+    rng = random.Random(f"ref-{lang}")
+    rows = []
+    if links is not None and not links.empty:
+        for _, r in links.iterrows():
+            if rng.random() < 0.7 and str(r.get("Link to", "")).strip():
+                s = rng.randint(3, 140)
+                rows.append({"referrer": r["Live Link"], "source": str(r["Domain"]), "Sessions": float(s),
+                             "Revenue": round(s * rng.uniform(0, 1.6), 2), "Conversions": float(round(s * rng.uniform(0, 0.03), 1))})
+    for src in ("google-news.example", "reddit.example"):      # unrelated referrers, to show the filtering
+        rows.append({"referrer": f"https://{src}/x", "source": src, "Sessions": 55.0, "Revenue": 40.0, "Conversions": 1.0})
     return pd.DataFrame(rows)
 
 

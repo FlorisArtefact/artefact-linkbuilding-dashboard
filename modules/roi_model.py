@@ -88,7 +88,7 @@ def linked_page_metrics(
            "ga4_matched_pages": 0, "gsc_matched_pages": 0}
     if links_df is None or links_df.empty or "Link to" not in links_df.columns:
         return out
-    targets = links_df["Link to"].dropna().astype(str).unique()
+    targets = [t for t in links_df["Link to"].dropna().astype(str).unique() if t.strip()]
     out["pages"] = len(targets)
 
     if ga4_df is not None and not ga4_df.empty and "path" in ga4_df.columns:

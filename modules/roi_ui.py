@@ -224,3 +224,4 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
     st.download_button("⬇️ Download management summary (.md)",
                        management_summary_text(client, period_label, total, a, notes),
                        file_name=f"management-summary-{client.split(' ')[0].lower()}.md", mime="text/markdown")
+    return total

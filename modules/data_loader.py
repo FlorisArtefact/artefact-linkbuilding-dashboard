@@ -58,6 +58,9 @@ def apply_filters(df: pd.DataFrame, year=None, quarter=None, campaign=None) -> p
 def get_landing_page_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "Link to" not in df.columns:
         return pd.DataFrame()
+    df = df[df["Link to"].astype(str).str.strip().replace("nan", "") != ""]   # brand mentions have no target url
+    if df.empty:
+        return pd.DataFrame()
     grp = df.groupby("Link to").agg(
         Links=("Live Link", "count"),
         Total_Cost=("Price", "sum"),

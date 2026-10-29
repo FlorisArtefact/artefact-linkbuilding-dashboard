@@ -18,7 +18,8 @@ def _pp(v) -> str:
     return "—" if v is None or pd.isna(v) else f"{v * 100:+.0f} pp"
 
 
-def render_growth_section(per_lang: dict, categories: dict | None, currency: str, flags: dict, demo_mode: bool) -> None:
+def render_growth_section(per_lang: dict, categories: dict | None, currency: str, flags: dict, demo_mode: bool):
+    """Renders the section; returns the headline summary row (dict) or None."""
     """per_lang: {lang: {"monthly": df(month,path,Revenue), "links": df(live links)}}"""
     st.markdown('<div class="section-title">📈 Revenue growth on linked pages</div>', unsafe_allow_html=True)
 
@@ -27,7 +28,7 @@ def render_growth_section(per_lang: dict, categories: dict | None, currency: str
         st.info("💡 Waiting for GA4 history. Once the service account has access, this section shows the monthly "
                 "**organic revenue** per landing page, per category and for the whole domain — with the date of every "
                 "placed link — and whether linked pages grew faster than the rest of the site.")
-        return
+        return None
 
     c1, c2, c3 = st.columns([1.2, 1.2, 1])
     market = c1.selectbox("Market", ["All markets"] + list(available), key="gr_market")
@@ -57,6 +58,7 @@ def render_growth_section(per_lang: dict, categories: dict | None, currency: str
 
     # ── headline numbers ──
     summ = summarize(table)
+    headline = summ.iloc[0].to_dict() if not summ.empty else None
     k1, k2, k3, k4 = st.columns(4)
     if summ.empty:
         k1.metric("Growth linked pages", "—", help="Not enough months of data before/after the first link yet.")
@@ -181,3 +183,4 @@ def render_growth_section(per_lang: dict, categories: dict | None, currency: str
         "(±10 pp = in line), which only controls for seasonality and site-wide trends. Revenue is organic-search only (GA4)."
         + (" **DEMO DATA.**" if demo_mode else "")
     )
+    return headline

@@ -93,6 +93,7 @@ def growth_table(monthly_df: pd.DataFrame, links_df: pd.DataFrame, window: int =
         return pd.DataFrame()
     dom = pv.sum(axis=1)
     links = links_df.dropna(subset=["Link to", "LL Date"]).copy()
+    links = links[links["Link to"].astype(str).str.strip() != ""]
     links["_path"] = links["Link to"].apply(norm_path)
     rows = []
     for path, grp in links.groupby("_path"):

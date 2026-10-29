@@ -133,6 +133,37 @@ def get_monthly_revenue_by_page(creds_file: str, property_id: str, months: int =
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=21600, show_spinner=False)  # 6 hours
+def get_referral_traffic(creds_file: str, property_id: str, days: int = 180, hostname: str = "") -> pd.DataFrame:
+    """Sessions/revenue/conversions arriving via referral (other sites linking to us).
+    Columns: referrer (full referring page URL when GA4 has it), source (domain), Sessions, Revenue, Conversions."""
+    if not property_id:
+        return pd.DataFrame()
+    try:
+        from googleapiclient.discovery import build
+
+        creds   = get_credentials(creds_file, GA4_SCOPES)
+        service = build("analyticsdata", "v1beta", credentials=creds, cache_discovery=False)
+        filters = [{"filter": {"fieldName": "sessionMedium", "stringFilter": {"matchType": "EXACT", "value": "referral"}}}]
+        if hostname:
+            filters.append({"filter": {"fieldName": "hostName",
+                                       "stringFilter": {"matchType": "CONTAINS", "value": hostname.removeprefix("www.")}}})
+        body = {
+            "dateRanges": [{"startDate": f"{days}daysAgo", "endDate": "today"}],
+            "dimensions": [{"name": "pageReferrer"}, {"name": "sessionSource"}],
+            "metrics": [{"name": "sessions"}, {"name": "totalRevenue"}, {"name": "conversions"}],
+            "dimensionFilter": {"andGroup": {"expressions": filters}} if len(filters) > 1 else filters[0],
+            "limit": 25000,
+        }
+        resp = service.properties().runReport(property=f"properties/{property_id}", body=body).execute()
+        data = [{"referrer": r["dimensionValues"][0]["value"], "source": r["dimensionValues"][1]["value"],
+                 "Sessions": float(r["metricValues"][0]["value"]), "Revenue": float(r["metricValues"][1]["value"]),
+                 "Conversions": float(r["metricValues"][2]["value"])} for r in resp.get("rows", [])]
+        return pd.DataFrame(data)
+    except Exception:
+        return pd.DataFrame()
+
+
 def load_ga4_csv(uploaded_file) -> pd.DataFrame:
     """Fallback while the service account has no GA4 access: parse a GA4 report export (CSV).
 
