@@ -94,7 +94,16 @@ def _normalise_live(df: pd.DataFrame, lang: str) -> pd.DataFrame:
     if price_cols:
         df = df.rename(columns={price_cols[0]: "Price"})
     if "LL Date" in df.columns:
-        df["LL Date"] = pd.to_datetime(df["LL Date"], errors="coerce")
+        # The sheet shows dates as dd-mm-yyyy (NL locale): month-first parsing silently swapped day and month
+        # or dropped every date with a day > 12. Sheet serial numbers (ints) are handled too.
+        raw = df["LL Date"]
+        num = pd.to_numeric(raw, errors="coerce")
+        parsed = pd.to_datetime(raw.where(num.isna()), errors="coerce", dayfirst=True)
+        serial = pd.to_datetime(num.where(num.notna()), unit="D", origin="1899-12-30", errors="coerce")
+        df["LL Date"] = parsed.fillna(serial)
+    for col in ("Link to", "Live Link", "Domain", "Anchor text"):      # stray spaces broke URL matching
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip().replace({"nan": ""})
     for col in ["DA", "Price", "Q", "Year", "Status code"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")

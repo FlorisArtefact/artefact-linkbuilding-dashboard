@@ -20,7 +20,7 @@ def _card(question: str, answer: str, detail: str, color: str) -> str:
             f'<div class="sc-a">{answer}</div><div class="sc-d">{detail}</div></div>')
 
 
-def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None, demo_mode: bool) -> None:
+def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None, demo_mode: bool, evidence: dict | None = None) -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
     cards, positive, known = [], 0, 0
 
@@ -38,8 +38,20 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
     else:
         cards.append(_card("Does it pay back?", "Not enough data", "Needs GA4 revenue (or a traffic estimate) and spend.", GREY))
 
-    # 2) Organic growth
-    if growth:
+    # 2) Organic growth — year-over-year evidence first (seasonality-free), before/after growth as fallback
+    ev_ = evidence or {}
+    vd = ev_.get("verdict")
+    if vd in ("accelerating", "stable", "slowing"):
+        g_, d_, b_ = ev_["yoy_now_linked"], ev_["yoy_now_domain"], ev_.get("yoy_before_domain")
+        txt = (f"Linked pages {g_:+.0%} year-over-year (change vs. before the campaign: {ev_['acceleration'] * 100:+.0f} pp); "
+               f"whole domain {d_:+.0%}" + (f" (before: {b_:+.0%})." if b_ is not None else "."))
+        label, col = {"accelerating": ("Growing faster than before", GREEN), "stable": ("No clear change yet", GREY),
+                      "slowing": ("Not outgrowing the past yet", AMBER)}[vd]
+        cards.append(_card("Do we see organic growth?", label, txt, col)); known += 1; positive += 1 if vd == "accelerating" else 0
+    elif vd in ("too_early", "no_baseline"):
+        cards.append(_card("Do we see organic growth?", "Too early to judge" if vd == "too_early" else "Not enough history",
+                           "Links need months to work; most linked pages are young or had no traffic a year ago.", GREY))
+    elif growth:
         out, g, dg = growth.get("Outperformance"), growth.get("Growth"), growth.get("Domain growth")
         txt = f"Linked pages {g:+.0%} vs. domain {dg:+.0%} (same months, around first link)." if dg is not None else f"Linked pages {g:+.0%}."
         if out is not None and out >= 0.10:
@@ -68,7 +80,7 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
     st.markdown(f'<div class="sc-wrap">{"".join(cards)}</div>', unsafe_allow_html=True)
     caveat = ""
     out_ = (growth or {}).get("Outperformance")
-    if adv == "increase" and out_ is not None and out_ <= -0.10:
+    if adv == "increase" and (vd == "slowing" or (not vd and out_ is not None and out_ <= -0.10)):
         caveat = (' <br><b>Note:</b> the payback figure credits 100% of the linked pages revenue to link building, while those '
                   'pages are growing slower than the domain. Treat the return as an <b>upper bound</b>, not as proof.')
     if known:

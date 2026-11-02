@@ -113,3 +113,41 @@ def merge_gsc_into_table(lp_table: pd.DataFrame, gsc_df: pd.DataFrame) -> pd.Dat
     gsc_slim = gsc_slim.groupby("Landing Page", as_index=False).mean(numeric_only=True)
     merged = lp_table.merge(gsc_slim, on="Landing Page", how="left")
     return merged
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_gsc_monthly(creds_file: str, site_url: str, months: int = 16) -> pd.DataFrame:
+    """Clicks / impressions / average position per month for the whole property (complete months only).
+    Columns: month, Clicks, Impressions, Position."""
+    if not site_url:
+        return pd.DataFrame()
+    try:
+        from googleapiclient.discovery import build
+        from urllib.parse import urlparse
+
+        creds = get_credentials(creds_file, GSC_SCOPES)
+        service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        end = datetime.now().date()
+        start = (pd.Timestamp(end).replace(day=1) - pd.DateOffset(months=months)).date()
+        body = {"startDate": start.isoformat(), "endDate": end.isoformat(), "dimensions": ["date"], "rowLimit": 25000}
+        host = urlparse(site_url).netloc.lower() if "://" in site_url else site_url.replace("sc-domain:", "")
+        bare = host.removeprefix("www.")
+        resp = None
+        for cand in dict.fromkeys([site_url, f"sc-domain:{bare}", f"https://{bare}/", f"https://www.{bare}/"]):
+            try:
+                resp = service.searchanalytics().query(siteUrl=cand, body=body).execute()
+                break
+            except Exception:
+                continue
+        rows = (resp or {}).get("rows", [])
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame([{"date": pd.Timestamp(r["keys"][0]), "Clicks": r["clicks"], "Impressions": r["impressions"],
+                            "pos_w": r["position"] * r["impressions"]} for r in rows])
+        df["month"] = df["date"].dt.to_period("M").dt.to_timestamp()
+        g = df.groupby("month").agg(Clicks=("Clicks", "sum"), Impressions=("Impressions", "sum"), pos_w=("pos_w", "sum")).reset_index()
+        g["Position"] = g["pos_w"] / g["Impressions"].where(g["Impressions"] > 0)
+        g = g[g["month"] < pd.Timestamp(end).replace(day=1)]
+        return g.drop(columns="pos_w")
+    except Exception:
+        return pd.DataFrame()

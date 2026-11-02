@@ -22,7 +22,7 @@ DEFAULT_CATEGORIES = {
 
 
 def norm_path(url: str) -> str:
-    return urlparse(str(url)).path.rstrip("/") or "/"
+    return urlparse(str(url).strip()).path.strip().rstrip("/") or "/"
 
 
 def category_of(url: str, categories: dict | None = None) -> str:
@@ -40,7 +40,7 @@ def last_full_month(today=None) -> pd.Timestamp:
     return t - pd.DateOffset(months=1)
 
 
-def monthly_pivot(monthly_df: pd.DataFrame, today=None) -> pd.DataFrame:
+def monthly_pivot(monthly_df: pd.DataFrame, today=None, value: str = "Revenue") -> pd.DataFrame:
     """Rows = months (complete months only, gaps filled with 0), columns = landing page path."""
     if monthly_df is None or monthly_df.empty:
         return pd.DataFrame()
@@ -51,7 +51,7 @@ def monthly_pivot(monthly_df: pd.DataFrame, today=None) -> pd.DataFrame:
     df = df[df["month"] <= last]
     if df.empty:
         return pd.DataFrame()
-    pv = df.pivot_table(index="month", columns="path", values="Revenue", aggfunc="sum").fillna(0.0)
+    pv = df.pivot_table(index="month", columns="path", values=value, aggfunc="sum").fillna(0.0)
     full = pd.date_range(pv.index.min(), last, freq="MS")
     return pv.reindex(full, fill_value=0.0)
 

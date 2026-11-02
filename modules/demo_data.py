@@ -93,7 +93,7 @@ def demo_ga4(lang: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def demo_monthly(lang: str, links: pd.DataFrame, months: int = 14) -> pd.DataFrame:
+def demo_monthly(lang: str, links: pd.DataFrame, months: int = 36) -> pd.DataFrame:
     """Synthetic monthly organic revenue per page: seasonal domain trend + a ramp-up after each page's
     first link (so the growth view has something to show). Same schema as get_monthly_revenue_by_page."""
     rng = random.Random(f"monthly-{lang}")
@@ -176,4 +176,27 @@ def demo_position_history(url: str, months: int, events: pd.DataFrame | None = N
         d = now - pd.DateOffset(months=months - 1 - k)
         progress = k / max(months - 1, 1)
         rows.append({"date": d, "avg_position": round(start_pos - progress * rng.uniform(8, 16) + rng.uniform(-1.5, 1.5), 1)})
+    return pd.DataFrame(rows)
+
+
+def demo_domain_history(lang: str, links: pd.DataFrame, months: int = 24) -> pd.DataFrame:
+    """Synthetic Ahrefs-style history: DR creeps up, referring domains and traffic grow after the campaign starts."""
+    rng = random.Random(f"dh-{lang}")
+    now = pd.Timestamp.today().normalize().replace(day=1)
+    start = pd.Timestamp(links["LL Date"].min()).to_period("M").to_timestamp() if links is not None and not links.empty else now - pd.DateOffset(months=8)
+    rows = []
+    for k in range(months):
+        m = now - pd.DateOffset(months=months - 1 - k)
+        since = max(0, (m.year - start.year) * 12 + m.month - start.month)
+        rows.append({"month": m, "DR": round(44 + 0.15 * k + 0.5 * min(since, 10) + rng.uniform(-0.4, 0.4)),
+                     "Refdomains": round(520 + 2 * k + 14 * since + rng.uniform(-8, 8)),
+                     "OrgTraffic": round(38000 * (1 + 0.012 * k + 0.02 * min(since, 10)) * rng.uniform(0.96, 1.04))})
+    return pd.DataFrame(rows)
+
+
+def demo_gsc_monthly(lang: str, months: int = 16) -> pd.DataFrame:
+    rng = random.Random(f"gm-{lang}")
+    now = pd.Timestamp.today().normalize().replace(day=1)
+    rows = [{"month": now - pd.DateOffset(months=months - k), "Clicks": round(30000 * (1 + 0.015 * k) * rng.uniform(0.92, 1.08))}
+            for k in range(months)]
     return pd.DataFrame(rows)

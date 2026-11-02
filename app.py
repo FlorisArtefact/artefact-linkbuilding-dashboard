@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import json
 import os
+from urllib.parse import urlparse
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -18,6 +19,7 @@ from modules.gsc_client import (
     load_gsc_csv,
     merge_gsc_into_table,
     get_gsc_data_api,
+    get_gsc_monthly,
     gsc_api_available,
 )
 from modules.ga4_client import (
@@ -35,6 +37,7 @@ from modules.referral_ui import render_referral_section
 from modules.growth_ui import render_growth_section
 from modules.ranking_ui import render_ranking_section
 from modules.scorecard_ui import render_scorecard
+from modules.evidence_ui import render_evidence_section
 from modules.sheets_loader import (
     load_live_links_sheets,
     load_opportunities_sheets,
@@ -501,7 +504,10 @@ elif use_ga4:
             if prop_id else pd.DataFrame()
         )
         monthly_data[lang] = (
-            get_monthly_revenue_by_page(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "")
+            get_monthly_revenue_by_page(
+                _creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "",
+                paths=tuple(sorted({urlparse(str(u).strip()).path or "/" for u in raw_links.get(lang, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).dropna()
+                                    if str(u).strip()})))
             if prop_id else pd.DataFrame()
         )
 elif any(ga4_csvs.values()):
@@ -641,9 +647,32 @@ if _est_possible and st.session_state.get("ahrefs_est"):
                     ahrefs_key, tuple(sorted(_df["Link to"].dropna().unique())))
 
 
-tabs_main = st.tabs(["💶 Return on investment", "📈 Results", "🌍 Reach (referral & mentions)",
+tabs_main = st.tabs(["🏆 Effect on organic", "💶 Return on investment", "📈 Results", "🌍 Reach (referral & mentions)",
                      "🔗 Links & health", "🔬 Page deep-dive"])
+# ── Effect on organic: linked pages vs. not linked vs. whole domain, authority ──────────
+@st.cache_data(ttl=21600, show_spinner=False)
+def _domain_histories(api_key: str, domains: tuple) -> dict:
+    from modules.ahrefs_client import get_domain_history
+    return {d: get_domain_history(api_key, d) for d in domains}
+
+
+if demo_mode:
+    _hist = {l: demo_data.demo_domain_history(l, raw_links.get(l)) for l in LANGUAGES}
+    _gscm = {l: demo_data.demo_gsc_monthly(l) for l in LANGUAGES}
+else:
+    _doms = {l: config.get("domains", {}).get(l, "") for l in LANGUAGES}
+    _hh = _domain_histories(ahrefs_key, tuple(d for d in _doms.values() if d)) if ahrefs_key else {}
+    _hist = {l: _hh.get(_doms[l]) for l in LANGUAGES}
+    _gscm = {l: get_gsc_monthly(_creds_file, config.get("gsc_properties", {}).get(l, "")) for l in LANGUAGES} if use_gsc_api else {}
+
 tabs_main[0].__enter__()
+evidence_headline = render_evidence_section(
+    per_lang={l: {"monthly": monthly_data.get(l), "links": raw_links.get(l, pd.DataFrame())} for l in LANGUAGES},
+    langs=LANGUAGES, domains=config.get("domains", {}), history=_hist, gsc_monthly=_gscm, currency="€",
+    categories=config.get("categories"), content_keywords=config.get("content_keywords"), demo_mode=demo_mode, flags=FLAGS)
+tabs_main[0].__exit__(None, None, None)
+
+tabs_main[1].__enter__()
 if _est_possible and not st.session_state.get("ahrefs_est"):
     st.info("💡 No revenue data yet (waiting for GA4). You can get an **indicative** return based on the Ahrefs traffic "
             "estimate of the linked pages. It takes about a minute the first time and uses Ahrefs API units.")
@@ -664,10 +693,10 @@ roi_total = render_roi_section(
     flags=FLAGS,
 )
 
-tabs_main[0].__exit__(None, None, None)
+tabs_main[1].__exit__(None, None, None)
 
 # ── Revenue growth on linked pages (per URL / category / domain) ────────────────
-tabs_main[1].__enter__()
+tabs_main[2].__enter__()
 growth_headline = render_growth_section(
     per_lang={lang: {"monthly": monthly_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
     categories=config.get("categories"),
@@ -688,23 +717,23 @@ ranking_result = render_ranking_section(
     flags=FLAGS,
 )
 
-tabs_main[1].__exit__(None, None, None)
+tabs_main[2].__exit__(None, None, None)
 
 # ── Referral visitors + brand mentions (side effects of the campaign) ───────────
-tabs_main[2].__enter__()
+tabs_main[3].__enter__()
 render_referral_section(
     per_lang={lang: {"referral": referral_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
     flags=FLAGS, demo_mode=demo_mode,
 )
 render_citations_section(raw_links, FLAGS, demo_mode)
-tabs_main[2].__exit__(None, None, None)
+tabs_main[3].__exit__(None, None, None)
 
 with scorecard_box:
-    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode)
+    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline)
 
 
 # ── Overview: links per language + costs ───────────────────────────────────────
-tabs_main[3].__enter__()
+tabs_main[4].__enter__()
 st.markdown('<div class="section-title">Overview by language</div>', unsafe_allow_html=True)
 col_chart, col_cards = st.columns([3, 1])
 
@@ -1000,7 +1029,7 @@ if broken_links > 0 and "Status code" in all_live.columns:
     st.dataframe(broken_df, width="stretch", hide_index=True)
 
 render_health_section(raw_links, FLAGS, demo_mode)
-tabs_main[3].__exit__(None, None, None)
+tabs_main[4].__exit__(None, None, None)
 
 
 # ── Impact analysis ────────────────────────────────────────────────────────────
@@ -1224,9 +1253,9 @@ def render_impact_analysis():
                     )
 
 
-tabs_main[4].__enter__()
+tabs_main[5].__enter__()
 render_impact_analysis()
-tabs_main[4].__exit__(None, None, None)
+tabs_main[5].__exit__(None, None, None)
 
 
 # ── Footer ─────────────────────────────────────────────────────────────────────

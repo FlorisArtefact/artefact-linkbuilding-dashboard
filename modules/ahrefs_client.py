@@ -146,3 +146,36 @@ class AhrefsClient:
     def enrich_landing_pages(self, urls: list) -> dict:
         with ThreadPoolExecutor(max_workers=6) as pool:
             return dict(zip(urls, pool.map(self.get_landing_page_metrics, urls)))
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_domain_history(api_key: str, domain: str, months: int = 24) -> pd.DataFrame:
+    """Monthly Domain Rating, referring domains and Ahrefs organic-traffic estimate for the whole domain.
+    Columns: month, DR, Refdomains, OrgTraffic. Works without GA4/GSC, for every market."""
+    from concurrent.futures import ThreadPoolExecutor
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+    start = (pd.Timestamp.today().replace(day=1) - pd.DateOffset(months=months)).strftime("%Y-%m-%d")
+    base = {"target": domain, "date_from": start, "date_to": pd.Timestamp.today().strftime("%Y-%m-%d"), "history_grouping": "monthly"}
+
+    def call(ep_key):
+        ep, extra = ep_key
+        try:
+            r = requests.get(f"{AHREFS_BASE}/site-explorer/{ep}", headers=headers, params={**base, **extra}, timeout=30)
+            return r.json() if r.status_code == 200 else {}
+        except Exception:
+            return {}
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        dr, rd, mt = ex.map(call, [("domain-rating-history", {}), ("refdomains-history", {}),
+                                   ("metrics-history", {"select": "date,org_traffic"})])
+    frames = []
+    for key, col, js in (("domain_ratings", "DR", dr), ("refdomains", "Refdomains", rd), ("metrics", "OrgTraffic", mt)):
+        rows = js.get(key, [])
+        if rows:
+            f = pd.DataFrame(rows)
+            f["month"] = pd.to_datetime(f["date"]).dt.tz_localize(None).dt.to_period("M").dt.to_timestamp()
+            src = {"DR": "domain_rating", "Refdomains": "refdomains", "OrgTraffic": "org_traffic"}[col]
+            frames.append(f.set_index("month")[[src]].rename(columns={src: col}))
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=1).reset_index().sort_values("month")

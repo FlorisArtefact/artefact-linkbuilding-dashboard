@@ -92,10 +92,14 @@ def get_revenue_by_page(creds_file: str, property_id: str, days: int = 90, organ
 
 
 @st.cache_data(ttl=21600, show_spinner=False)  # 6 hours
-def get_monthly_revenue_by_page(creds_file: str, property_id: str, months: int = 14, organic_only: bool = True,
-                                hostname: str = "") -> pd.DataFrame:
+def get_monthly_revenue_by_page(creds_file: str, property_id: str, months: int = 36, organic_only: bool = True,
+                                hostname: str = "", paths: tuple = ()) -> pd.DataFrame:
     """Monthly organic revenue/sessions per landing page (for growth analysis).
-    Columns: month (first day), path, Revenue, Sessions."""
+    Columns: month (first day), path, Revenue, Sessions.
+
+    Fast path: when `paths` (the pages that received links) is given, only those pages are fetched per month, plus the
+    domain total; everything else is returned as one row '(other pages)' = total - linked pages. So the table still sums to the
+    domain total, but needs a few hundred rows instead of >100,000. Without `paths` all pages are fetched (paged)."""
     if not property_id:
         return pd.DataFrame()
     try:
@@ -105,30 +109,50 @@ def get_monthly_revenue_by_page(creds_file: str, property_id: str, months: int =
         creds   = get_credentials(creds_file, GA4_SCOPES)
         service = build("analyticsdata", "v1beta", credentials=creds, cache_discovery=False)
         start = (pd.Timestamp(date.today()).replace(day=1) - pd.DateOffset(months=months)).strftime("%Y-%m-%d")
-        body = {
-            "dateRanges": [{"startDate": start, "endDate": "today"}],
-            "dimensions": [{"name": "yearMonth"}, {"name": "landingPagePlusQueryString"}],
-            "metrics": [{"name": "totalRevenue"}, {"name": "sessions"}],
-            "limit": 100000,
-        }
-        filters = []
+        base_filters = []
         if organic_only:
-            filters.append({"filter": {"fieldName": "sessionDefaultChannelGroup",
-                                       "stringFilter": {"matchType": "EXACT", "value": "Organic Search"}}})
+            base_filters.append({"filter": {"fieldName": "sessionDefaultChannelGroup",
+                                            "stringFilter": {"matchType": "EXACT", "value": "Organic Search"}}})
         if hostname:
-            filters.append({"filter": {"fieldName": "hostName",
-                                       "stringFilter": {"matchType": "CONTAINS", "value": hostname.removeprefix("www.")}}})
-        if len(filters) == 1:
-            body["dimensionFilter"] = filters[0]
-        elif filters:
-            body["dimensionFilter"] = {"andGroup": {"expressions": filters}}
-        resp = service.properties().runReport(property=f"properties/{property_id}", body=body).execute()
-        rows = resp.get("rows", [])
-        data = [{"month": pd.to_datetime(r["dimensionValues"][0]["value"] + "01", format="%Y%m%d"),
-                 "path": r["dimensionValues"][1]["value"].split("?")[0],
-                 "Revenue": float(r["metricValues"][0]["value"]), "Sessions": float(r["metricValues"][1]["value"])}
-                for r in rows]
-        return pd.DataFrame(data)
+            base_filters.append({"filter": {"fieldName": "hostName",
+                                            "stringFilter": {"matchType": "CONTAINS", "value": hostname.removeprefix("www.")}}})
+
+        def run(dims, extra_filters, page=100000):
+            out, offset = [], 0
+            while offset < 1_000_000:
+                flt = base_filters + extra_filters
+                body = {"dateRanges": [{"startDate": start, "endDate": "today"}],
+                        "dimensions": [{"name": d} for d in dims],
+                        "metrics": [{"name": "totalRevenue"}, {"name": "sessions"}], "limit": page, "offset": offset}
+                if len(flt) == 1:
+                    body["dimensionFilter"] = flt[0]
+                elif flt:
+                    body["dimensionFilter"] = {"andGroup": {"expressions": flt}}
+                rows = service.properties().runReport(property=f"properties/{property_id}", body=body).execute().get("rows", [])
+                out += rows
+                if len(rows) < page:
+                    break
+                offset += page
+            return out
+
+        def to_df(rows, with_path=True):
+            return pd.DataFrame([{"month": pd.to_datetime(r["dimensionValues"][0]["value"] + "01", format="%Y%m%d"),
+                                  "path": (r["dimensionValues"][1]["value"].split("?")[0] if with_path else "(all)"),
+                                  "Revenue": float(r["metricValues"][0]["value"]), "Sessions": float(r["metricValues"][1]["value"])}
+                                 for r in rows])
+
+        if not paths:
+            return to_df(run(["yearMonth", "landingPage"], []))
+        variants = sorted({v for p in paths for v in (p, p.rstrip("/") or "/", (p.rstrip("/") + "/"))})
+        linked = to_df(run(["yearMonth", "landingPage"], [{"filter": {"fieldName": "landingPage",
+                                                                       "inListFilter": {"values": variants}}}]))
+        total = to_df(run(["yearMonth"], []), with_path=False)
+        if total.empty:
+            return linked
+        sums = linked.groupby("month")[["Revenue", "Sessions"]].sum() if not linked.empty else pd.DataFrame(columns=["Revenue", "Sessions"])
+        rest = total.set_index("month")[["Revenue", "Sessions"]].sub(sums, fill_value=0).clip(lower=0).reset_index()
+        rest["path"] = "(other pages)"
+        return pd.concat([linked, rest], ignore_index=True)
     except Exception:
         return pd.DataFrame()
 
