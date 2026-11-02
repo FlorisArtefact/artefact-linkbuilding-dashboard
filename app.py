@@ -464,6 +464,24 @@ q_filter    = None if selected_quarter == "All" else selected_quarter
 camp_filter = campaign_filter.strip() or None
 _month_no   = None if selected_month == "All" else _months.index(selected_month)
 
+# Period the GA4 numbers (revenue, conversions, referral visitors) cover = the Year / Quarter / Month filters.
+# Never later than today; a period that has not started yet falls back to the last 90 days.
+_today = pd.Timestamp.today().normalize()
+if _month_no:
+    _p0 = pd.Timestamp(selected_year, _month_no, 1)
+    _p1 = _p0 + pd.offsets.MonthEnd(0)
+elif q_filter:
+    _p0 = pd.Timestamp(selected_year, 3 * int(q_filter[1]) - 2, 1)
+    _p1 = _p0 + pd.offsets.MonthEnd(3)
+else:
+    _p0, _p1 = pd.Timestamp(selected_year, 1, 1), pd.Timestamp(selected_year, 12, 31)
+_p1 = min(_p1, _today - pd.Timedelta(days=1))
+if _p0 > _p1:
+    _p0, _p1 = _today - pd.Timedelta(days=90), _today - pd.Timedelta(days=1)
+PERIOD_START, PERIOD_END = _p0.date().isoformat(), _p1.date().isoformat()
+PERIOD_DAYS = (_p1 - _p0).days + 1
+PERIOD_TXT = f"{_p0:%-d %b} – {_p1:%-d %b %Y}" if os.name != "nt" else f"{_p0.day} {_p0:%b} – {_p1.day} {_p1:%b %Y}"
+
 live_data, opp_data, raw_links = {}, {}, {}
 for lang in LANGUAGES:
     if demo_mode:
@@ -515,11 +533,13 @@ elif use_ga4:
         # If all markets share ONE property (no per-language id), filter on this market's domain
         _shared = not config.get("ga4", {}).get("property_ids", {}).get(lang)
         ga4_data[lang] = (
-            get_revenue_by_page(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "")
+            get_revenue_by_page(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "",
+                                start_date=PERIOD_START, end_date=PERIOD_END)
             if prop_id else pd.DataFrame()
         )
         referral_data[lang] = (
-            get_referral_traffic(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "")
+            get_referral_traffic(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "",
+                                 start_date=PERIOD_START, end_date=PERIOD_END)
             if prop_id else pd.DataFrame()
         )
         monthly_data[lang] = (
@@ -614,8 +634,8 @@ c4.metric(
          "Nofollow links do not. A higher dofollow percentage is better for organic rankings."
 )
 # ── GA4 business-impact KPIs (only shown once GA4 is connected) ────────────────
-# Scope is explicit: the numbers cover the selected market(s), organic search, the LAST 90 DAYS, and are not tied to the
-# year/quarter/month filter (those only filter links and spend). Whole site vs. the pages that received links are split.
+# Scope is explicit: selected market(s), organic search, and the period set by the Year/Quarter/Month filters (PERIOD_*).
+# Whole site vs. the pages that received links are split.
 if use_ga4 and any(not d.empty for d in ga4_data.values()):
     from modules.growth_model import norm_path as _norm_path
     _rev_all = _rev_linked = _conv_all = 0.0
@@ -630,9 +650,9 @@ if use_ga4 and any(not d.empty for d in ga4_data.values()):
 
     g1, g2, g3 = st.columns(3)
     g1.metric(
-        f"Organic revenue · {_scope} · last 90 days", fmt_eur(_rev_all),
-        help="Organic-search revenue (GA4) of the WHOLE site for the selected market(s) over the last 90 days. "
-             "Not affected by the year/quarter/month filter. Other markets are excluded when one market is selected.")
+        f"Organic revenue · {_scope} · {PERIOD_TXT}", fmt_eur(_rev_all),
+        help="Organic-search revenue (GA4) of the WHOLE site for the selected market(s) in the period set by the "
+             "Year / Quarter / Month filters (never beyond yesterday).")
     g2.metric(
         "…of which on pages with links", fmt_eur(_rev_linked),
         help="The part of that revenue landing on pages that received at least one link (all time).")
@@ -709,6 +729,8 @@ roi_total = render_roi_section(
     gsc_connected=bool(demo_mode or not gsc_df.empty),
     demo_mode=demo_mode,
     flags=FLAGS,
+    window_days=PERIOD_DAYS if (use_ga4 and not demo_mode) else 90,
+    window_txt=PERIOD_TXT if (use_ga4 and not demo_mode) else "last 90 days",
 )
 
 tabs_main[1].__exit__(None, None, None)
@@ -741,30 +763,13 @@ tabs_main[2].__exit__(None, None, None)
 tabs_main[3].__enter__()
 render_referral_section(
     per_lang={lang: {"referral": referral_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
-    flags=FLAGS, demo_mode=demo_mode,
+    flags=FLAGS, demo_mode=demo_mode, period_txt=PERIOD_TXT if not demo_mode else "demo data",
 )
 render_citations_section(raw_links, FLAGS, demo_mode)
 tabs_main[3].__exit__(None, None, None)
 
-def _gsc_signal(gscm: dict):
-    """Whole-site Search Console clicks: last 3 complete months vs the same months a year earlier."""
-    frames = [d.assign(pos_w=d["Position"].fillna(0) * d["Impressions"]) for d in (gscm or {}).values()
-              if d is not None and not d.empty]
-    if not frames:
-        return None
-    d = pd.concat(frames).groupby("month").agg(Clicks=("Clicks", "sum"), Impr=("Impressions", "sum"), pw=("pos_w", "sum"))
-    end = d.index.max()
-    cur = d[(d.index > end - pd.DateOffset(months=3)) & (d.index <= end)]
-    prv = d[(d.index > end - pd.DateOffset(months=15)) & (d.index <= end - pd.DateOffset(months=12))]
-    if len(cur) < 3 or len(prv) < 3 or prv["Clicks"].sum() <= 0:
-        return None
-    pos = lambda x: (x["pw"].sum() / x["Impr"].sum()) if x["Impr"].sum() > 0 else None
-    return {"yoy": cur["Clicks"].sum() / prv["Clicks"].sum() - 1, "pos_now": pos(cur), "pos_prev": pos(prv)}
-
-
 with scorecard_box:
-    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline,
-                     gsc=_gsc_signal({l: _gscm.get(l) for l in LANGUAGES}))
+    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline)
 
 
 # ── Overview: links per language + costs ───────────────────────────────────────

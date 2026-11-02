@@ -32,9 +32,10 @@ def ga4_available(config: dict, creds_file: str, lang: str = None) -> bool:
 
 @st.cache_data(ttl=21600, show_spinner=False)  # 6 hours
 def get_revenue_by_page(creds_file: str, property_id: str, days: int = 90, organic_only: bool = True,
-                        hostname: str = "") -> pd.DataFrame:
+                        hostname: str = "", start_date: str = "", end_date: str = "") -> pd.DataFrame:
     """Fetch revenue, conversions and sessions per landing page path from GA4.
 
+    start_date / end_date (ISO) select an exact period; without them the last `days` days are used.
     organic_only=True restricts to the 'Organic Search' channel group — required for a fair
     link-building ROI (paid/direct/email revenue on the same page is not caused by links)."""
     if not property_id:
@@ -46,14 +47,14 @@ def get_revenue_by_page(creds_file: str, property_id: str, days: int = 90, organ
         service = build("analyticsdata", "v1beta", credentials=creds, cache_discovery=False)
 
         body = {
-            "dateRanges": [{"startDate": f"{days}daysAgo", "endDate": "today"}],
-            "dimensions": [{"name": "landingPagePlusQueryString"}],
+            "dateRanges": [{"startDate": start_date or f"{days}daysAgo", "endDate": end_date or "today"}],
+            "dimensions": [{"name": "landingPage"}],
             "metrics": [
                 {"name": "totalRevenue"},
                 {"name": "conversions"},
                 {"name": "sessions"},
             ],
-            "limit": 10000,
+            "limit": 100000,
         }
         filters = []
         if organic_only:
@@ -158,7 +159,8 @@ def get_monthly_revenue_by_page(creds_file: str, property_id: str, months: int =
 
 
 @st.cache_data(ttl=21600, show_spinner=False)  # 6 hours
-def get_referral_traffic(creds_file: str, property_id: str, days: int = 180, hostname: str = "") -> pd.DataFrame:
+def get_referral_traffic(creds_file: str, property_id: str, days: int = 180, hostname: str = "",
+                         start_date: str = "", end_date: str = "") -> pd.DataFrame:
     """Sessions/revenue/conversions arriving via referral (other sites linking to us).
     Columns: referrer (full referring page URL when GA4 has it), source (domain), Sessions, Revenue, Conversions."""
     if not property_id:
@@ -173,7 +175,7 @@ def get_referral_traffic(creds_file: str, property_id: str, days: int = 180, hos
             filters.append({"filter": {"fieldName": "hostName",
                                        "stringFilter": {"matchType": "CONTAINS", "value": hostname.removeprefix("www.")}}})
         body = {
-            "dateRanges": [{"startDate": f"{days}daysAgo", "endDate": "today"}],
+            "dateRanges": [{"startDate": start_date or f"{days}daysAgo", "endDate": end_date or "today"}],
             "dimensions": [{"name": "pageReferrer"}, {"name": "sessionSource"}],
             "metrics": [{"name": "sessions"}, {"name": "totalRevenue"}, {"name": "conversions"}],
             "dimensionFilter": {"andGroup": {"expressions": filters}} if len(filters) > 1 else filters[0],

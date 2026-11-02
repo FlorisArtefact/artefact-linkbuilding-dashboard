@@ -21,9 +21,20 @@ def test_improving_when_position_and_traffic_up():
     assert s["top10_start"] == 2 and s["top10_now"] == 6
 
 
+def test_conflicting_signals_are_mixed_not_declining():
+    # position and traffic worse, but top-10 keywords up in the fixture -> mixed
+    assert trend_status(aggregate({"/a": _hist(10, 20, 200, 100)}))["status"] == "mixed"
+    # position better but traffic estimate down -> mixed
+    assert trend_status(aggregate({"/a": _hist(20, 10, 200, 100)}))["status"] == "mixed"
+
+
 def test_declining_and_stable():
-    assert trend_status(aggregate({"/a": _hist(10, 20, 200, 100)}))["status"] == "declining"
-    assert trend_status(aggregate({"/a": _hist(10, 10.3, 100, 101)}))["status"] == "stable"
+    worse = _hist(10, 20, 200, 100)
+    worse["top10"] = [3, 1]
+    assert trend_status(aggregate({"/a": worse}))["status"] == "declining"
+    flat = _hist(10, 10.3, 100, 101)
+    flat["top10"] = [3, 3]
+    assert trend_status(aggregate({"/a": flat}))["status"] == "stable"
 
 
 def test_no_data_is_unknown():

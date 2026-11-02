@@ -41,10 +41,13 @@ def referral_by_domain(referral: pd.DataFrame, links: pd.DataFrame) -> pd.DataFr
     return g.reset_index().rename(columns={"_host": "Domain"}).sort_values("Sessions", ascending=False).reset_index(drop=True)
 
 
-def render_referral_section(per_lang: dict, flags: dict, demo_mode: bool) -> None:
-    """per_lang: {lang: {"referral": df|None, "links": live links df (all periods)}}"""
+def render_referral_section(per_lang: dict, flags: dict, demo_mode: bool, period_txt: str = "last 180 days") -> None:
+    """per_lang: {lang: {"referral": df|None, "links": live links df (all periods)}}.
+    The referral sessions were fetched for `period_txt` (the Year/Quarter/Month filters)."""
     st.markdown('<div class="section-title">🔗 Visitors coming through the placed links (referral traffic)</div>',
                 unsafe_allow_html=True)
+    st.caption(f"Period: **{period_txt}** (follows the Year / Quarter / Month filters). Counts visitors from sites where a link "
+               "was placed at any time, so a link placed later in the year still shows its visitors for the whole period.")
     frames = []
     for lang, d in per_lang.items():
         t = referral_by_domain(d.get("referral"), d.get("links"))
@@ -63,7 +66,7 @@ def render_referral_section(per_lang: dict, flags: dict, demo_mode: bool) -> Non
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Visitors via placed links", f"{allt['Sessions'].sum():,.0f}", help="GA4 sessions with medium 'referral' from "
-              "domains where we placed a link (last 180 days).")
+              f"domains where we placed a link ({period_txt}).")
     k2.metric("Revenue from them", f"€{allt['Revenue'].sum():,.0f}")
     k3.metric("Conversions", f"{allt['Conversions'].sum():,.0f}")
     k4.metric("Sites sending visitors", f"{len(allt)}")

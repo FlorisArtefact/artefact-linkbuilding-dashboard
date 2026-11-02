@@ -53,10 +53,22 @@ def trend_status(agg: pd.DataFrame) -> dict:
     pos_change = float(a["avg_position"] - b["avg_position"])          # positive = better (lower number)
     t0, t1 = float(a["est_traffic"]), float(b["est_traffic"])
     tr = (t1 / t0 - 1.0) if t0 > 0 else None
-    score = (1 if pos_change >= POSITION_STEP else -1 if pos_change <= -POSITION_STEP else 0)
+    t10_0, t10_1 = int(a["top10"]), int(b["top10"])
+    t10 = (t10_1 / t10_0 - 1.0) if t10_0 > 0 else None
+    dirs = [1 if pos_change >= POSITION_STEP else -1 if pos_change <= -POSITION_STEP else 0]
     if tr is not None:
-        score += (1 if tr >= TRAFFIC_STEP else -1 if tr <= -TRAFFIC_STEP else 0)
-    status = "improving" if score >= 1 else "declining" if score <= -1 else "stable"
+        dirs.append(1 if tr >= TRAFFIC_STEP else -1 if tr <= -TRAFFIC_STEP else 0)
+    if t10 is not None:
+        dirs.append(1 if t10 >= TRAFFIC_STEP else -1 if t10 <= -TRAFFIC_STEP else 0)
+    # Careful wording: conflicting signals are "mixed", never a plain "declining".
+    if any(d > 0 for d in dirs) and any(d < 0 for d in dirs):
+        status = "mixed"
+    elif any(d > 0 for d in dirs):
+        status = "improving"
+    elif any(d < 0 for d in dirs):
+        status = "declining"
+    else:
+        status = "stable"
     return {"status": status, "pos_start": float(a["avg_position"]), "pos_now": float(b["avg_position"]),
             "pos_change": pos_change, "traffic_start": t0, "traffic_now": t1, "traffic_change": tr,
             "top10_start": int(a["top10"]), "top10_now": int(b["top10"]),

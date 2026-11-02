@@ -20,7 +20,7 @@ def _card(question: str, answer: str, detail: str, color: str) -> str:
             f'<div class="sc-a">{answer}</div><div class="sc-d">{detail}</div></div>')
 
 
-def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None, demo_mode: bool, evidence: dict | None = None, gsc: dict | None = None) -> None:
+def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None, demo_mode: bool, evidence: dict | None = None) -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
     cards, positive, known = [], 0, 0
 
@@ -66,28 +66,18 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
 
     # 3) Rankings
     st_ = (ranking or {}).get("status", "unknown")
-    if st_ in ("improving", "stable", "declining"):
+    if st_ in ("improving", "stable", "mixed", "declining"):
         r = ranking
-        det = (f"Avg. position {r['pos_start']:.1f} → {r['pos_now']:.1f}; top-10 keywords {r['top10_start']} → {r['top10_now']}.")
-        label = {"improving": "Improving", "stable": "Stable", "declining": "Declining"}[st_]
-        cards.append(_card("Are rankings getting better?", label, det, {"improving": GREEN, "stable": GREY, "declining": AMBER}[st_]))
+        det = (f"Avg. position {r['pos_start']:.1f} → {r['pos_now']:.1f}; top-10 keywords {r['top10_start']} → {r['top10_now']}"
+               + (f"; Ahrefs traffic estimate {r['traffic_change']:+.0%}" if r.get("traffic_change") is not None else "")
+               + ". Ahrefs estimates, see the Results tab.")
+        label = {"improving": "Improving", "stable": "Stable", "mixed": "Mixed signals", "declining": "Mixed to weaker"}[st_]
+        cards.append(_card("Are rankings getting better?", label, det,
+                           {"improving": GREEN, "stable": GREY, "mixed": GREY, "declining": GREY}[st_]))
         known += 1
         positive += 1 if st_ == "improving" else 0
     else:
         cards.append(_card("Are rankings getting better?", "No data", "Needs the Ahrefs key and linked pages in the selected market.", GREY))
-
-    # 4) Search Console: Google clicks of the whole site, year-over-year (same months a year earlier)
-    g_ = gsc or {}
-    if g_.get("yoy") is not None:
-        y = g_["yoy"]
-        label, col = (("Growing", GREEN) if y >= 0.05 else ("Declining", AMBER) if y <= -0.05 else ("Stable", GREY))
-        pos = (f" Avg. position {g_['pos_prev']:.1f} → {g_['pos_now']:.1f}." if g_.get("pos_now") and g_.get("pos_prev") else "")
-        cards.append(_card("Is Google sending more clicks?", label,
-                           f"Clicks last 3 months {y:+.0%} vs. same months last year (whole site).{pos}", col))
-        known += 1
-        positive += 1 if y >= 0.05 else 0
-    else:
-        cards.append(_card("Is Google sending more clicks?", "No data", "Needs Search Console access for this market.", GREY))
 
     st.markdown('<div class="section-title">🎯 Campaign scorecard — is link building paying off?</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sc-wrap">{"".join(cards)}</div>', unsafe_allow_html=True)

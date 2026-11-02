@@ -8,8 +8,8 @@ from modules.ranking_model import aggregate, per_url_table, trend_status
 
 NAVY, PINK, TEAL, MID, WHITE = "#1B2D5B", "#E5007D", "#00B4C8", "#8B9BB4", "#FFFFFF"
 LANG_COLORS = [PINK, NAVY, TEAL, "#FF7043", "#7B1FA2"]
-STATUS_TXT = {"improving": ("🟢", "Improving"), "stable": ("⚪", "Stable"),
-              "declining": ("🟠", "Declining"), "unknown": ("⚪", "No data yet")}
+STATUS_TXT = {"improving": ("🟢", "Improving"), "stable": ("⚪", "Stable"), "mixed": ("🟡", "Mixed signals"),
+              "declining": ("⚪", "Mixed to weaker"), "unknown": ("⚪", "No data yet")}
 
 
 @st.cache_data(ttl=21600, show_spinner=False)   # 6 h — cached per URL, so switching market reuses earlier fetches
@@ -37,6 +37,20 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
     if not langs:
         st.info("No landing pages with links in the selected data.")
         return result
+
+    with st.expander("ℹ️ What am I looking at? (source and how to read it)"):
+        st.markdown(
+            "- **Source: Ahrefs, not GA4 and not Google.** For every landing page that received a link, Ahrefs gives a monthly "
+            "snapshot of the keywords it ranks for. We compare the first snapshot in the look-back window with the latest one.\n"
+            "- **Avg. position:** average Google position over the keywords each page ranks for (lower number = higher up).\n"
+            "- **Keywords in top 10:** how many keywords of these pages Ahrefs sees in positions 1–10.\n"
+            "- **Est. organic traffic:** Ahrefs' *model* (position × search volume × expected click rate). It is **not** measured "
+            "visits, so it can differ strongly from GA4.\n"
+            "- **Why signals can disagree:** the keyword set changes every month (long-tail keywords appear and disappear), "
+            "volumes shift and AI answers take clicks. A page can rank higher on its core keywords while the total keyword count and "
+            "the traffic *estimate* fall. That is why a mix is shown as 'Mixed signals' and not as a failure.\n"
+            "- **What to do with it:** use it as an early, indirect signal. The decisive evidence is revenue (tab *Effect on organic*)."
+        )
 
     months = st.slider("Look back (months)", 3, 12, 6, key="rk_months",
                        help="How far back to compare. The campaign has been running for about six months.")

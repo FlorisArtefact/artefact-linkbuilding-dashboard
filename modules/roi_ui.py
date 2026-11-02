@@ -73,13 +73,15 @@ def _roi_txt(r) -> str:
 
 
 def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
-                       ga4_connected: bool, gsc_connected: bool, demo_mode: bool, flags: dict) -> None:
-    """per_lang: {lang: {"links": df_of_live_links, "ga4": df, "gsc": df}} (already filtered to the period)."""
+                       ga4_connected: bool, gsc_connected: bool, demo_mode: bool, flags: dict,
+                       window_days: int = 90, window_txt: str = "last 90 days") -> None:
+    """per_lang: {lang: {"links": df_of_live_links, "ga4": df, "gsc": df}} (already filtered to the period).
+    window_days / window_txt: the period the GA4 revenue/traffic was measured over (scaled up to the horizon)."""
     st.markdown(_CSS, unsafe_allow_html=True)
     st.markdown('<div class="section-title">💼 Business value & budget signal</div>', unsafe_allow_html=True)
 
     # Aggregate per language
-    rows, tot_inv, tot_rev, tot_traffic, tot_days = [], 0.0, 0.0, 0.0, 90
+    rows, tot_inv, tot_rev, tot_traffic, tot_days = [], 0.0, 0.0, 0.0, window_days
     for lang, d in per_lang.items():
         links = d["links"]
         inv = float(links["Price"].sum()) if (not links.empty and "Price" in links.columns) else 0.0
@@ -129,7 +131,10 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
                     if total["mode"] == "revenue" else
                     "**estimated** from organic visits × assumed conversion rate × assumed value per conversion "
                     "(no GA4 revenue available — treat as indicative)")
-        st.caption(f"Value basis: {mode_txt}. Horizon: {int(a['horizon_months'])} months.")
+        scale = (365.0 / max(tot_days, 1)) * (float(a["horizon_months"]) / 12.0)
+        st.caption(f"Value basis: {mode_txt}. **How the bar is built:** revenue on the linked pages in {window_txt} "
+                   f"({_money(a, tot_rev)}) × {scale:.1f} = projected over {int(a['horizon_months'])} months, "
+                   f"set against the investment of the selected links ({_money(a, total['investment'])}).")
 
         c1, c2 = st.columns(2)
         with c1:
@@ -138,12 +143,12 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
                                  text=[_money(a, total["investment"])], textposition="outside"))
             for s in (("base",) if same else SCENARIOS):
                 v = total["scenarios"][s]["value"]
-                fig.add_trace(go.Bar(x=["Revenue on linked pages" if same else SCENARIO_LABELS[s] + " scenario"], y=[v], marker_color=SCEN_COLORS[s],
+                fig.add_trace(go.Bar(x=[f"Projected revenue, {int(a['horizon_months'])} months" if same else SCENARIO_LABELS[s] + " scenario"], y=[v], marker_color=SCEN_COLORS[s],
                                      name=SCENARIO_LABELS[s], text=[_money(a, v)], textposition="outside"))
             fig.add_hline(y=total["investment"], line=dict(color=PINK, width=1.5, dash="dash"),
                           annotation_text="break-even", annotation_position="top left",
                           annotation_font=dict(size=10, color=PINK))
-            fig.update_layout(title=dict(text="Investment vs. attributable value", font=dict(size=13, color=NAVY)),
+            fig.update_layout(title=dict(text="Investment vs. projected value (revenue on linked pages)", font=dict(size=13, color=NAVY)),
                               showlegend=False, height=340, paper_bgcolor=WHITE, plot_bgcolor=WHITE,
                               font=dict(family="Roboto", color=NAVY, size=11), margin=dict(t=45, b=30, l=40, r=20),
                               yaxis=dict(gridcolor="#E8ECF2", zeroline=False), xaxis=dict(showgrid=False), bargap=0.35)
@@ -187,7 +192,7 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
         notes.append("DEMO MODE — all numbers are synthetic.")
     notes.append(f"GA4: {'connected' if ga4_connected else 'not connected'}; Search Console: "
                  f"{'connected' if gsc_connected else 'not connected'}.")
-    notes.append(f"Value basis: {total['mode'] or 'none available'}. Revenue/traffic window: last {tot_days} days, "
+    notes.append(f"Value basis: {total['mode'] or 'none available'}. Revenue/traffic window: {window_txt} ({tot_days} days), "
                  f"extrapolated to {int(a['horizon_months'])} months.")
     notes.append("Attribution shares (" + " / ".join(f"{a['attribution_share'][s]:.0%}" for s in SCENARIOS) +
                  ") are PLACEHOLDERS — not yet validated with BWJ, colleagues or pillar leads.")
