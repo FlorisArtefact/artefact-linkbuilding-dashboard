@@ -120,7 +120,7 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
     have = [l for l in langs if per_lang.get(l, {}).get("monthly") is not None and not per_lang[l]["monthly"].empty]
     c1, c2 = st.columns([2, 2])
     options = (["All markets"] if len(have) > 1 else []) + have
-    market = c1.selectbox("Market", options or ["—"], key="ev_market")
+    market = c1.selectbox("Market", options or ["—"], key=f"ev_market_{'-'.join(have)}")
     metric = c2.radio("Measure", ["Organic revenue", "Organic sessions"], horizontal=True, key="ev_metric",
                       help="Sessions are steadier month to month; revenue is what the business cares about.")
     headline = None
@@ -188,7 +188,8 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                             'their own development. Pages younger than 3 months are not counted.</div>', unsafe_allow_html=True)
                 ct = ev.cohort_table(pt, "Type")
                 if not ct.empty:
-                    st.dataframe(ct.drop(columns=["Last 3 months", "Same months last year"]), width="stretch", hide_index=True)
+                    st.dataframe(ct.drop(columns=["Last 3 months", "Same months last year"]), width="stretch", hide_index=True,
+                                 column_config={"YoY now (pooled)": st.column_config.NumberColumn("YoY now (pooled)", format="percent")})
                 new = pt[(pt["Status"] == "No baseline (new page)") & (pt["Months since"] >= ev.MIN_MONTHS)]
                 if len(new):
                     st.info(f"**{len(new)} linked pages had little or no organic {'revenue' if value == 'Revenue' else 'traffic'} a year ago** "

@@ -4,7 +4,7 @@ import streamlit as st
 _CSS = """
 <style>
 .sc-wrap{display:flex;gap:.9rem;flex-wrap:wrap;margin:.2rem 0 .6rem}
-.sc-card{flex:1;min-width:230px;background:#fff;border:1px solid #E8ECF2;border-top:4px solid var(--c);
+.sc-card{flex:1;min-width:200px;background:#fff;border:1px solid #E8ECF2;border-top:4px solid var(--c);
   border-radius:12px;padding:.9rem 1.1rem;box-shadow:0 2px 10px rgba(27,45,91,.06)}
 .sc-q{font-size:.72rem;text-transform:uppercase;letter-spacing:.8px;color:#8B9BB4}
 .sc-a{font-size:1.25rem;font-weight:700;color:#1B2D5B;margin:.25rem 0}
@@ -20,7 +20,7 @@ def _card(question: str, answer: str, detail: str, color: str) -> str:
             f'<div class="sc-a">{answer}</div><div class="sc-d">{detail}</div></div>')
 
 
-def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None, demo_mode: bool, evidence: dict | None = None) -> None:
+def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None, demo_mode: bool, evidence: dict | None = None, gsc: dict | None = None) -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
     cards, positive, known = [], 0, 0
 
@@ -74,7 +74,20 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
         known += 1
         positive += 1 if st_ == "improving" else 0
     else:
-        cards.append(_card("Are rankings getting better?", "Not loaded", "Open the Results tab and load the ranking trend (uses Ahrefs units).", GREY))
+        cards.append(_card("Are rankings getting better?", "No data", "Needs the Ahrefs key and linked pages in the selected market.", GREY))
+
+    # 4) Search Console: Google clicks of the whole site, year-over-year (same months a year earlier)
+    g_ = gsc or {}
+    if g_.get("yoy") is not None:
+        y = g_["yoy"]
+        label, col = (("Growing", GREEN) if y >= 0.05 else ("Declining", AMBER) if y <= -0.05 else ("Stable", GREY))
+        pos = (f" Avg. position {g_['pos_prev']:.1f} → {g_['pos_now']:.1f}." if g_.get("pos_now") and g_.get("pos_prev") else "")
+        cards.append(_card("Is Google sending more clicks?", label,
+                           f"Clicks last 3 months {y:+.0%} vs. same months last year (whole site).{pos}", col))
+        known += 1
+        positive += 1 if y >= 0.05 else 0
+    else:
+        cards.append(_card("Is Google sending more clicks?", "No data", "Needs Search Console access for this market.", GREY))
 
     st.markdown('<div class="section-title">🎯 Campaign scorecard — is link building paying off?</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sc-wrap">{"".join(cards)}</div>', unsafe_allow_html=True)

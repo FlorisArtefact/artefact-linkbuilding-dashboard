@@ -31,7 +31,8 @@ def render_growth_section(per_lang: dict, categories: dict | None, currency: str
         return None
 
     c1, c2, c3 = st.columns([1.2, 1.2, 1])
-    market = c1.selectbox("Market", ["All markets"] + list(available), key="gr_market")
+    market = (c1.selectbox("Market", ["All markets"] + list(available), key=f"gr_market_{'-'.join(available)}")
+              if len(available) > 1 else next(iter(available)))
     window = c2.slider("Compare ± months around first link", 2, 6, 3, key="gr_window",
                        help="Average monthly revenue in N months before vs. N months after the first link to a page.")
     scope = c3.radio("Level", ["Domain", "Category", "Landing page"], key="gr_scope", horizontal=False)

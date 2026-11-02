@@ -12,13 +12,16 @@ STATUS_TXT = {"improving": ("🟢", "Improving"), "stable": ("⚪", "Stable"),
               "declining": ("🟠", "Declining"), "unknown": ("⚪", "No data yet")}
 
 
-@st.cache_data(ttl=21600, show_spinner=False)   # 6 h — each URL x snapshot costs Ahrefs API units
+@st.cache_data(ttl=21600, show_spinner=False)   # 6 h — cached per URL, so switching market reuses earlier fetches
+def _fetch_one(api_key: str, url: str, months: int):
+    from modules.ahrefs_client import AhrefsClient
+    return AhrefsClient(api_key).get_snapshot_history(url, months)
+
+
 def _fetch_history(api_key: str, urls: tuple, months: int) -> dict:
     from concurrent.futures import ThreadPoolExecutor
-    from modules.ahrefs_client import AhrefsClient
-    client = AhrefsClient(api_key)
     with ThreadPoolExecutor(max_workers=6) as pool:
-        results = list(pool.map(lambda u: client.get_snapshot_history(u, months), urls))
+        results = list(pool.map(lambda u: _fetch_one(api_key, u, months), urls))
     return dict(zip(urls, results))
 
 
@@ -47,12 +50,7 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
         st.info("Add the Ahrefs API key to load ranking history (Search Console will replace this once connected).")
         return result
     else:
-        if st.button(f"📥 Load ranking trend (~{n_calls} Ahrefs requests, cached 6 h)", key="rk_load"):
-            st.session_state["rk_loaded"] = True
-        if not st.session_state.get("rk_loaded"):
-            st.caption("Not loaded yet — this uses Ahrefs API units, so it only runs when you ask for it.")
-            return result
-        with st.spinner("Fetching ranking history from Ahrefs…"):
+        with st.spinner(f"Fetching ranking history from Ahrefs… (first time ~{n_calls} requests, then cached for 6 hours)"):
             for l in langs:
                 history_by_lang[l] = _fetch_history(api_key, tuple(sorted(per_lang[l]["urls"])), months)
 

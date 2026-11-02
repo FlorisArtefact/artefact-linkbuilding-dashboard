@@ -158,7 +158,7 @@ html, body, [class*="css"] {{ font-family: 'Roboto', sans-serif; }}
 
 #MainMenu, footer {{ visibility: hidden; }}
 [data-testid="stDecoration"] {{ display: none; }}
-.block-container {{ padding-top: 1rem; padding-bottom: 2rem; max-width: 1400px; }}
+.block-container {{ padding-top: 3.6rem; padding-bottom: 2rem; max-width: 1400px; }}
 
 /* Header: compact, one line */
 .dash-header {{
@@ -283,6 +283,8 @@ with st.sidebar:
     year_opts = list(range(current_year - 1, current_year + 2))
     selected_year = st.selectbox("Year", year_opts, index=year_opts.index(current_year))
     selected_quarter = st.selectbox("Quarter", ["All", "Q1", "Q2", "Q3", "Q4"])
+    _months = ["All", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    selected_month = st.selectbox("Month", _months, help="Only links placed in this month (and the spend on them). Combine with Year.")
     campaign_filter = st.text_input("Campaign", placeholder="e.g. Paid linkbuilding")
 
 
@@ -443,9 +445,24 @@ if not demo_mode and not use_sheets and excel_source is None:
     st.stop()
 
 
+# ── Market filter (top of the page): everything below — KPIs, scorecard, all tabs — follows it ──
+header_box = st.container()
+market_box = st.container()
+ALL_LANGUAGES = list(LANGUAGES)
+if len(ALL_LANGUAGES) > 1:
+    with market_box:
+        _opts = {"All markets": None, **{f"{FLAGS.get(l, '')} {l}".strip(): l for l in ALL_LANGUAGES}}
+        _pick = st.radio("Market", list(_opts), horizontal=True, key="market_filter", label_visibility="collapsed",
+                         help="Pick one country to see only its links, spend, revenue and effect.")
+        _sel_lang = _opts.get(_pick)
+    if _sel_lang:
+        LANGUAGES = [_sel_lang]
+market_label = LANGUAGES[0] if len(LANGUAGES) == 1 and len(ALL_LANGUAGES) > 1 else "All markets"
+
 # ── Load & filter data ─────────────────────────────────────────────────────────
 q_filter    = None if selected_quarter == "All" else selected_quarter
 camp_filter = campaign_filter.strip() or None
+_month_no   = None if selected_month == "All" else _months.index(selected_month)
 
 live_data, opp_data, raw_links = {}, {}, {}
 for lang in LANGUAGES:
@@ -457,6 +474,8 @@ for lang in LANGUAGES:
         raw = load_live_links(excel_source, lang)
     raw_links[lang] = raw   # unfiltered: growth analysis needs the FIRST link ever to a page
     live_data[lang] = apply_filters(raw, year=selected_year, quarter=q_filter, campaign=camp_filter)
+    if _month_no and not live_data[lang].empty and "LL Date" in live_data[lang].columns:
+        live_data[lang] = live_data[lang][pd.to_datetime(live_data[lang]["LL Date"], errors="coerce").dt.month == _month_no]
 
     if demo_mode:
         opp_data[lang] = demo_data.demo_opportunities(lang)
@@ -541,12 +560,15 @@ lang_costs  = {lang: df["Price"].sum() if "Price" in df.columns else 0 for lang,
 
 # ── Dashboard header ───────────────────────────────────────────────────────────
 quarter_label = selected_quarter if selected_quarter != "All" else "All quarters"
+if selected_month != "All":
+    quarter_label = f"{selected_month}"
 data_badge    = "🧪 Demo data" if demo_mode else ("🟢 Live · Google Sheets" if use_sheets else "📁 Excel")
-st.markdown(f"""
+with header_box:
+    st.markdown(f"""
 <div class="dash-header">
     <div>
         <h1>🔗 Linkbuilding Dashboard</h1>
-        <div class="sub">{CLIENT} &nbsp;·&nbsp; {selected_year} &nbsp;·&nbsp; {quarter_label} &nbsp;·&nbsp; {data_badge}</div>
+        <div class="sub">{CLIENT} &nbsp;·&nbsp; {market_label} &nbsp;·&nbsp; {selected_year} &nbsp;·&nbsp; {quarter_label} &nbsp;·&nbsp; {data_badge}</div>
     </div>
     <div class="artefact-pill">Artefact</div>
 </div>
@@ -571,7 +593,7 @@ st.markdown('<div class="status-strip">'
 
 
 # ── Global KPIs ────────────────────────────────────────────────────────────────
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric(
     "Live links placed", total_links,
     help="Total number of live backlinks placed in the selected period, across all languages."
@@ -591,36 +613,32 @@ c4.metric(
     help="Dofollow links pass 'link juice' to the target page and are directly valuable for SEO. "
          "Nofollow links do not. A higher dofollow percentage is better for organic rankings."
 )
-c5.metric(
-    "Links to check", broken_links,
-    delta=f"{broken_links} ⚠️" if broken_links else "All good", delta_color="inverse",
-    help="Number of backlinks returning a non-200 HTTP status code (e.g. 403 or 404). "
-         "This means the link may have been removed or blocked. "
-         "Contact the publisher to resolve this."
-)
-
 # ── GA4 business-impact KPIs (only shown once GA4 is connected) ────────────────
+# Scope is explicit: the numbers cover the selected market(s), organic search, the LAST 90 DAYS, and are not tied to the
+# year/quarter/month filter (those only filter links and spend). Whole site vs. the pages that received links are split.
 if use_ga4 and any(not d.empty for d in ga4_data.values()):
-    all_ga4 = pd.concat([d for d in ga4_data.values() if not d.empty], ignore_index=True)
-    total_revenue     = all_ga4["Revenue"].sum()
-    total_conversions = all_ga4["Conversions"].sum()
-    roi               = (total_revenue / total_cost) if total_cost > 0 else None
+    from modules.growth_model import norm_path as _norm_path
+    _rev_all = _rev_linked = _conv_all = 0.0
+    for _l, _d in ga4_data.items():
+        if _d is None or _d.empty:
+            continue
+        _lp = {_norm_path(u) for u in raw_links.get(_l, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).dropna() if str(u).strip()}
+        _rev_all += float(_d["Revenue"].sum())
+        _conv_all += float(_d["Conversions"].sum())
+        _rev_linked += float(_d.loc[_d["path"].apply(_norm_path).isin(_lp), "Revenue"].sum())
+    _scope = market_label
 
     g1, g2, g3 = st.columns(3)
     g1.metric(
-        "Total revenue (GA4)", fmt_eur(total_revenue),
-        help="Total revenue tracked by Google Analytics 4 across all landing pages in this period."
-    )
+        f"Organic revenue · {_scope} · last 90 days", fmt_eur(_rev_all),
+        help="Organic-search revenue (GA4) of the WHOLE site for the selected market(s) over the last 90 days. "
+             "Not affected by the year/quarter/month filter. Other markets are excluded when one market is selected.")
     g2.metric(
-        "Total conversions", f"{total_conversions:,.0f}",
-        help="Total number of conversions/goal completions across all landing pages (source: GA4)."
-    )
+        "…of which on pages with links", fmt_eur(_rev_linked),
+        help="The part of that revenue landing on pages that received at least one link (all time).")
     g3.metric(
-        "Gross revenue / cost", f"{roi:.1f}x" if roi is not None else "—",
-        help="Organic GA4 revenue divided by link-building investment — NOT incremental ROI "
-             "(it does not separate link-building impact from other SEO). "
-             "See 'Business value & budget advice' below for the scenario-based ROI."
-    )
+        "Share from pages with links", f"{_rev_linked / _rev_all:.0%}" if _rev_all else "—",
+        help="Pages with links as a share of all organic revenue. See the 'Effect on organic' tab for how this develops.")
 
 
 # ── Business value & budget advice (generic ROI module) ────────────────────────
@@ -728,12 +746,32 @@ render_referral_section(
 render_citations_section(raw_links, FLAGS, demo_mode)
 tabs_main[3].__exit__(None, None, None)
 
+def _gsc_signal(gscm: dict):
+    """Whole-site Search Console clicks: last 3 complete months vs the same months a year earlier."""
+    frames = [d.assign(pos_w=d["Position"].fillna(0) * d["Impressions"]) for d in (gscm or {}).values()
+              if d is not None and not d.empty]
+    if not frames:
+        return None
+    d = pd.concat(frames).groupby("month").agg(Clicks=("Clicks", "sum"), Impr=("Impressions", "sum"), pw=("pos_w", "sum"))
+    end = d.index.max()
+    cur = d[(d.index > end - pd.DateOffset(months=3)) & (d.index <= end)]
+    prv = d[(d.index > end - pd.DateOffset(months=15)) & (d.index <= end - pd.DateOffset(months=12))]
+    if len(cur) < 3 or len(prv) < 3 or prv["Clicks"].sum() <= 0:
+        return None
+    pos = lambda x: (x["pw"].sum() / x["Impr"].sum()) if x["Impr"].sum() > 0 else None
+    return {"yoy": cur["Clicks"].sum() / prv["Clicks"].sum() - 1, "pos_now": pos(cur), "pos_prev": pos(prv)}
+
+
 with scorecard_box:
-    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline)
+    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline,
+                     gsc=_gsc_signal({l: _gscm.get(l) for l in LANGUAGES}))
 
 
 # ── Overview: links per language + costs ───────────────────────────────────────
 tabs_main[4].__enter__()
+st.metric("Links to check", broken_links, delta=f"{broken_links} ⚠️" if broken_links else "All good", delta_color="inverse",
+          help="Number of backlinks returning a non-200 HTTP status code (e.g. 403 or 404). "
+               "The link may have been removed or blocked. Contact the publisher to resolve this.")
 st.markdown('<div class="section-title">Overview by language</div>', unsafe_allow_html=True)
 col_chart, col_cards = st.columns([3, 1])
 
