@@ -200,3 +200,12 @@ def demo_gsc_monthly(lang: str, months: int = 16) -> pd.DataFrame:
     rows = [{"month": now - pd.DateOffset(months=months - k), "Clicks": round(30000 * (1 + 0.015 * k) * rng.uniform(0.92, 1.08))}
             for k in range(months)]
     return pd.DataFrame(rows)
+
+
+def demo_gsc_summary(lang: str, idx: int) -> dict:
+    """Synthetic Search Console summary for the ranking section: idx 0 = start of look-back, 1 = now."""
+    rnd = random.Random(f"gscsum-{lang}")
+    base_pos, base_imp = 9 + rnd.random() * 4, 8000 + rnd.random() * 4000
+    if idx == 0:
+        return {"clicks": base_imp * 0.03, "impressions": base_imp, "position": base_pos, "top10": 60, "pairs": 400}
+    return {"clicks": base_imp * 1.15 * 0.032, "impressions": base_imp * 1.15, "position": base_pos - 0.9, "top10": 72, "pairs": 440}

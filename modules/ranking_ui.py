@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from modules import demo_data
+from modules.gsc_client import get_gsc_linked_summary
 from modules.ranking_model import aggregate, per_url_table, trend_status
 
 NAVY, PINK, TEAL, MID, WHITE = "#1B2D5B", "#E5007D", "#00B4C8", "#8B9BB4", "#FFFFFF"
@@ -25,7 +26,8 @@ def _fetch_history(api_key: str, urls: tuple, months: int) -> dict:
     return dict(zip(urls, results))
 
 
-def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags: dict) -> dict:
+def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags: dict,
+                           gsc_creds: str = "", gsc_sites: dict | None = None) -> dict:
     """per_lang: {lang: {"urls": [landing page urls that received links]}}.
     Returns {lang: status dict, "_total": status dict} (status 'unknown' until data is loaded)."""
     st.markdown('<div class="section-title">🏁 Rankings of all pages we build links to</div>', unsafe_allow_html=True)
@@ -49,6 +51,10 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
             "- **Why signals can disagree:** the keyword set changes every month (long-tail keywords appear and disappear), "
             "volumes shift and AI answers take clicks. A page can rank higher on its core keywords while the total keyword count and "
             "the traffic *estimate* fall. That is why a mix is shown as 'Mixed signals' and not as a failure.\n"
+            "- **Search Console (second column) is Google's own measured data** for the same pages: average position over "
+            "all queries, queries on positions 1–10 and impressions, last complete month versus the first month of the "
+            "look-back. Google hides rare queries, so its counts are lower than Ahrefs'; Ahrefs models, Google measures. "
+            "Where both point the same way the signal is strong; where they differ, the truth is usually in between.\n"
             "- **What to do with it:** use it as an early, indirect signal. The decisive evidence is revenue (tab *Effect on organic*)."
         )
 
@@ -64,11 +70,22 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
         st.info("Add the Ahrefs API key to load ranking history (Search Console will replace this once connected).")
         return result
     else:
-        with st.spinner(f"Fetching ranking history from Ahrefs… (first time ~{n_calls} requests, then cached for 6 hours)"):
-            for l in langs:
-                history_by_lang[l] = _fetch_history(api_key, tuple(sorted(per_lang[l]["urls"])), months)
+        try:
+            with st.spinner(f"Fetching ranking history from Ahrefs… (first time ~{n_calls} requests, then cached for 6 hours)"):
+                for l in langs:
+                    history_by_lang[l] = _fetch_history(api_key, tuple(sorted(per_lang[l]["urls"])), months)
+        except RuntimeError:
+            st.warning("Ahrefs did not answer (most likely its rate limit). Nothing was stored; reload in a minute to try again. "
+                       "Search Console numbers do not depend on it.")
+            return result
 
-    # ── per market headline ──
+    # Search Console windows: the same look-back, as whole calendar months (start month vs. last complete month)
+    now_m = pd.Timestamp.today().normalize().replace(day=1) - pd.DateOffset(months=1)
+    start_m = now_m - pd.DateOffset(months=months)
+    win = {"start": (start_m.date().isoformat(), (start_m + pd.offsets.MonthEnd(0)).date().isoformat()),
+           "now": (now_m.date().isoformat(), (now_m + pd.offsets.MonthEnd(0)).date().isoformat())}
+
+    # ── per market headline: Ahrefs (modelled) next to Search Console (measured by Google) ──
     cols = st.columns(len(langs))
     aggs = {}
     for i, l in enumerate(langs):
@@ -79,14 +96,42 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
         icon, label = STATUS_TXT[s["status"]]
         with cols[i]:
             st.markdown(f"**{flags.get(l, '🌐')} {l}** &nbsp; {icon} {label}")
-            if s["status"] == "unknown":
-                st.caption("Not enough ranking data.")
-            else:
-                st.metric("Avg. position", f"{s['pos_now']:.1f}", delta=f"{s['pos_change']:+.1f} places",
-                          help="Average position of the keywords these pages rank for. A positive delta = better.")
-                st.metric("Keywords in top 10", s["top10_now"], delta=s["top10_now"] - s["top10_start"])
-                if s["traffic_change"] is not None:
-                    st.metric("Est. organic traffic", f"{s['traffic_now']:,.0f}", delta=f"{s['traffic_change']:+.0%}")
+            ca, cg = st.columns(2)
+            with ca:
+                st.caption("**Ahrefs** · modelled")
+                if s["status"] == "unknown":
+                    st.caption("Not enough ranking data.")
+                else:
+                    st.metric("Avg. position", f"{s['pos_now']:.1f}", delta=f"{s['pos_change']:+.1f} places",
+                              help="Average position of the keywords these pages rank for. A positive delta = better.")
+                    st.metric("Keywords in top 10", s["top10_now"], delta=s["top10_now"] - s["top10_start"])
+                    if s["traffic_change"] is not None:
+                        st.metric("Est. organic traffic", f"{s['traffic_now']:,.0f}", delta=f"{s['traffic_change']:+.0%}")
+            with cg:
+                st.caption("**Search Console** · measured by Google")
+                site = (gsc_sites or {}).get(l, "")
+                g0 = g1 = None
+                if demo_mode:
+                    g0, g1 = demo_data.demo_gsc_summary(l, 0), demo_data.demo_gsc_summary(l, 1)
+                elif site and gsc_creds:
+                    urls = tuple(sorted(per_lang[l]["urls"]))
+                    g0 = get_gsc_linked_summary(gsc_creds, site, urls, *win["start"])
+                    g1 = get_gsc_linked_summary(gsc_creds, site, urls, *win["now"])
+                if not g0 or not g1 or g0.get("position") is None or g1.get("position") is None:
+                    st.caption("No Search Console access for this market yet." if not (site and gsc_creds) or (g0 is None or g1 is None)
+                               else "No impressions recorded for these pages in the compared months.")
+                else:
+                    st.metric("Avg. position", f"{g1['position']:.1f}", delta=f"{g0['position'] - g1['position']:+.1f} places",
+                              help="Impression-weighted average position of these pages over all queries, last complete month "
+                                   "versus the first month of the look-back.")
+                    st.metric("Queries in top 10", g1["top10"], delta=g1["top10"] - g0["top10"],
+                              help="Page + search query pairs on positions 1-10. Google hides rare queries, so this is "
+                                   "lower than a keyword tool shows.")
+                    st.metric("Impressions", f"{g1['impressions']:,.0f}",
+                              delta=(f"{g1['impressions'] / g0['impressions'] - 1:+.0%}" if g0["impressions"] else None),
+                              help="Times these pages were shown in Google results (a measured number).")
+                    st.caption(f"{start_m:%b %Y} → {now_m:%b %Y}")
+                result[f"{l}_gsc"] = {"start": g0, "now": g1}
 
     all_hist = {f"{l}|{u}": df for l in langs for u, df in history_by_lang[l].items()}
     result["_total"] = trend_status(aggregate(all_hist))

@@ -151,3 +151,65 @@ def get_gsc_monthly(creds_file: str, site_url: str, months: int = 16) -> pd.Data
         return g.drop(columns="pos_w")
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)  # 6 hours
+def get_gsc_linked_summary(creds_file: str, site_url: str, urls: tuple, start: str, end: str) -> dict | None:
+    """Measured Google performance of the pages that received links, for one period (ISO dates).
+    Looks at every page + search query pair of those pages. Returns None without access / data.
+    Keys: clicks, impressions, position (impression-weighted average), top10 (page+query pairs on positions 1-10), pairs.
+    Note: Google hides rare (anonymised) queries, so counts are lower than a third-party keyword tool shows."""
+    if not site_url or not urls:
+        return None
+    try:
+        import re
+        from urllib.parse import urlparse
+        from googleapiclient.discovery import build
+
+        creds = get_credentials(creds_file, GSC_SCOPES)
+        service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        paths = sorted({(urlparse(str(u).strip()).path or "/").rstrip("/") or "/" for u in urls})
+        chunks, cur, size = [], [], 0
+        for p in paths:                                   # keep every regex well below the API's size limit
+            esc = re.escape(p if p != "/" else "")
+            if size + len(esc) > 2500 and cur:
+                chunks.append(cur); cur, size = [], 0
+            cur.append(esc); size += len(esc) + 1
+        if cur:
+            chunks.append(cur)
+        host = urlparse(site_url).netloc.lower() if "://" in site_url else site_url.replace("sc-domain:", "")
+        bare = host.removeprefix("www.")
+        site = None
+        rows = []
+        for cand in dict.fromkeys([site_url, f"sc-domain:{bare}", f"https://{bare}/", f"https://www.{bare}/"]):
+            try:
+                rows = []
+                for ch in chunks:
+                    pattern = r"^https?://[^/]+(" + "|".join(ch) + r")/?$"
+                    start_row = 0
+                    while True:
+                        body = {"startDate": start, "endDate": end, "dimensions": ["page", "query"], "rowLimit": 25000,
+                                "startRow": start_row,
+                                "dimensionFilterGroups": [{"filters": [{"dimension": "page", "operator": "includingRegex",
+                                                                         "expression": pattern}]}]}
+                        resp = service.searchanalytics().query(siteUrl=cand, body=body).execute()
+                        got = resp.get("rows", [])
+                        rows += got
+                        if len(got) < 25000 or start_row > 100000:
+                            break
+                        start_row += 25000
+                site = cand
+                break
+            except Exception:
+                continue
+        if site is None:
+            return None
+        if not rows:
+            return {"clicks": 0.0, "impressions": 0.0, "position": None, "top10": 0, "pairs": 0}
+        d = pd.DataFrame([{"clicks": r["clicks"], "impr": r["impressions"], "pos": r["position"]} for r in rows])
+        impr = float(d["impr"].sum())
+        return {"clicks": float(d["clicks"].sum()), "impressions": impr,
+                "position": float((d["pos"] * d["impr"]).sum() / impr) if impr > 0 else None,
+                "top10": int((d["pos"] <= 10).sum()), "pairs": int(len(d))}
+    except Exception:
+        return None

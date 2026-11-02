@@ -755,6 +755,8 @@ ranking_result = render_ranking_section(
     api_key=ahrefs_key,
     demo_mode=demo_mode,
     flags=FLAGS,
+    gsc_creds=_creds_file if use_gsc_api else "",
+    gsc_sites=config.get("gsc_properties", {}),
 )
 
 tabs_main[2].__exit__(None, None, None)
@@ -1161,8 +1163,11 @@ def render_impact_analysis():
                 if cache_key not in st.session_state:
                     short = ia_url.rstrip("/").split("/")[-1] or ia_url
                     with st.spinner(f"Ahrefs: fetching {ia_months} monthly snapshots for {short}..."):
-                        st.session_state[cache_key] = ahrefs_client.get_position_history(ia_url, ia_months)
-                ahrefs_history = st.session_state[cache_key]
+                        try:
+                            st.session_state[cache_key] = ahrefs_client.get_position_history(ia_url, ia_months)
+                        except RuntimeError:
+                            st.warning("Ahrefs did not answer (rate limit?). Try again in a minute.")
+                ahrefs_history = st.session_state.get(cache_key, pd.DataFrame())
 
             has_data = (
                 (not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any())

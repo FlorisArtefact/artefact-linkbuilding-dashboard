@@ -16,21 +16,33 @@ class AhrefsClient:
         self.headers = {"Authorization": f"Bearer {api_key}"}
         self.today = datetime.now().strftime("%Y-%m-%d")
 
-    def _get(self, endpoint: str, params: dict) -> Optional[dict]:
+    def _get(self, endpoint: str, params: dict, strict: bool = False) -> Optional[dict]:
+        """GET with retries on rate limits (429) and server errors. strict=True raises when it still fails, so callers
+        wrapped in st.cache_data do not cache a failure as if it were 'no data'."""
+        import time
         # Only set today as default if no date is explicitly provided
         params.setdefault("date", self.today)
-        try:
-            resp = requests.get(
-                f"{AHREFS_BASE}/{endpoint}",
-                headers=self.headers,
-                params=params,
-                timeout=25,
-            )
-            if resp.status_code == 200:
-                return resp.json()
-            return None
-        except Exception:
-            return None
+        last = None
+        for attempt in range(6):
+            try:
+                resp = requests.get(
+                    f"{AHREFS_BASE}/{endpoint}",
+                    headers=self.headers,
+                    params=params,
+                    timeout=25,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                last = f"HTTP {resp.status_code}"
+                if resp.status_code not in (429, 500, 502, 503, 504):
+                    break                                   # e.g. 4xx: retrying will not help
+                time.sleep(float(resp.headers.get("Retry-After", 0)) or 4 * (attempt + 1))
+            except Exception as e:                          # network hiccup
+                last = type(e).__name__
+                time.sleep(2 * (attempt + 1))
+        if strict:
+            raise RuntimeError(f"Ahrefs request failed ({last})")
+        return None
 
     def _clean_url(self, url: str) -> str:
         return url.replace("https://", "").replace("http://", "").rstrip("/")
@@ -73,6 +85,7 @@ class AhrefsClient:
                 "select": "keyword,best_position,sum_traffic",
                 "limit": limit,
             },
+            strict=True,
         )
         return data.get("keywords", []) if data else []
 
