@@ -508,6 +508,14 @@ elif any(ga4_csvs.values()):
     use_ga4 = True
     ga4_data = {lang: (load_ga4_csv(f) if f else pd.DataFrame()) for lang, f in ga4_csvs.items()}
 
+# Markets whose GA4 property reports another currency (e.g. UK = GBP): convert revenue to the reporting currency.
+# Rate = config "fx_to_eur", e.g. {"EN": 1.15}. It is an assumption, shown in the ROI notes; set it to a sensible average.
+_fx = config.get("fx_to_eur", {})
+for _d in (ga4_data, monthly_data, referral_data):
+    for _lang, _df in _d.items():
+        if _fx.get(_lang) and _df is not None and not _df.empty and "Revenue" in _df.columns:
+            _d[_lang] = _df.assign(Revenue=_df["Revenue"] * float(_fx[_lang]))
+
 
 # ── Aggregate KPIs ─────────────────────────────────────────────────────────────
 total_links  = len(all_live)

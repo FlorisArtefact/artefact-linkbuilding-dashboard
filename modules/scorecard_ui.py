@@ -66,7 +66,12 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
 
     st.markdown('<div class="section-title">🎯 Campaign scorecard — is link building paying off?</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sc-wrap">{"".join(cards)}</div>', unsafe_allow_html=True)
+    caveat = ""
+    out_ = (growth or {}).get("Outperformance")
+    if adv == "increase" and out_ is not None and out_ <= -0.10:
+        caveat = (' <br><b>Note:</b> the payback figure credits 100% of the linked pages revenue to link building, while those '
+                  'pages are growing slower than the domain. Treat the return as an <b>upper bound</b>, not as proof.')
     if known:
         st.markdown(f'<div class="sc-sum">Read together: <b>{positive} of {known}</b> available signals point the right way. '
                     f'This is direction, not proof — links work with a delay and rankings and revenue also depend on content, '
-                    f'technique and competition.{" <b>DEMO DATA.</b>" if demo_mode else ""}</div>', unsafe_allow_html=True)
+                    f'technique and competition.{caveat}{" <b>DEMO DATA.</b>" if demo_mode else ""}</div>', unsafe_allow_html=True)
