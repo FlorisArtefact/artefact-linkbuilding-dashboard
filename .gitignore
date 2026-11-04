@@ -20,3 +20,4 @@ __pycache__/
 !config.json
 !config.example.json
 !clients/*.json
+.cache/

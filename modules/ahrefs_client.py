@@ -48,6 +48,7 @@ def guarded_get(api_key: str, endpoint: str, params: dict, timeout: int = 25) ->
             continue
         if resp.status_code == 200:
             data = resp.json()
+            guard.register_units(guard.estimate_units(endpoint, data))
             guard.cache_put(endpoint, params, data)
             return data
         last = f"HTTP {resp.status_code}"
@@ -58,6 +59,17 @@ def guarded_get(api_key: str, endpoint: str, params: dict, timeout: int = 25) ->
         if resp.status_code not in (500, 502, 503, 504):
             break
     raise RuntimeError(f"Ahrefs request failed ({last})")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def workspace_usage(api_key: str) -> dict:
+    """Whole-subscription usage from Ahrefs' own meter (free request, measured: it costs no units)."""
+    r = requests.get(f"{AHREFS_BASE}/subscription-info/limits-and-usage",
+                     headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"}, timeout=15)
+    if r.status_code != 200:
+        return {}
+    d = r.json().get("limits_and_usage", {})
+    return {"used": d.get("units_usage_workspace"), "limit": d.get("units_limit_workspace"), "reset": d.get("usage_reset_date")}
 
 
 class AhrefsClient:
@@ -78,6 +90,10 @@ class AhrefsClient:
             "target": self._clean_url(url), "mode": "exact", "date": date,
             "select": "keyword,best_position,sum_traffic", "limit": KW_LIMIT, "order_by": "sum_traffic:desc"}
 
+    def _summary_at_date(self, url: str, date: str) -> tuple:
+        return "site-explorer/metrics", {"target": self._clean_url(url), "mode": "exact", "date": date,
+                                         "select": "org_keywords,org_keywords_1_3,org_traffic"}
+
     def _kw_now(self, url: str, limit: int = 50) -> tuple:
         return "site-explorer/organic-keywords", {
             "target": self._clean_url(url), "mode": "exact", "date": self.today,
@@ -85,13 +101,13 @@ class AhrefsClient:
 
     # ── counters: real requests still needed (stored results are free) ──
     def pending_snapshots(self, urls, months: int) -> int:
-        return sum(1 for u in set(urls) for d in snapshot_dates(months) if not guard.cache_has(*self._kw_at_date(u, d)))
+        return sum(1 for u in set(urls) for d in snapshot_dates(months) if not guard.cache_has(*self._summary_at_date(u, d)))
 
     def pending_position_history(self, url: str, months: int) -> int:
-        return sum(1 for d in self._monthly_dates(months) if not guard.cache_has(*self._kw_at_date(url, d)))
+        return sum(1 for d in self._monthly_dates(months) if not guard.cache_has(*self._summary_at_date(url, d)))
 
     def pending_landing(self, urls) -> int:
-        return sum(1 for u in set(urls) if not guard.cache_has(*self._kw_now(u)))
+        return sum(1 for u in set(urls) if not guard.cache_has(*self._summary_at_date(u, self.today)))
 
     # ── single calls ──
     @st.cache_data(ttl=3600, show_spinner=False)
@@ -122,48 +138,35 @@ class AhrefsClient:
         return [_month_start(i) for i in range(months)]
 
     def get_position_history(self, url: str, months: int = 6) -> pd.DataFrame:
-        """Monthly position history for one page (page deep-dive): one request per month, stored afterwards.
-        Columns: date, avg_position, top_position, keywords, est_traffic."""
-        dates = self._monthly_dates(months)
+        """Monthly history for one page (page deep-dive) from the page summary: one 50-unit request per month.
+        Columns: date, avg_position (not in the summary, NaN), top_position (NaN), keywords, top3, est_traffic."""
         records = []
-        for snapshot_date in dates:                  # sequential: stops at the first refusal
-            keywords = self.get_url_keywords_at_date(url, snapshot_date)
-            positions = [kw["best_position"] for kw in keywords if kw.get("best_position")]
-            records.append({
-                "date": pd.to_datetime(snapshot_date),
-                "avg_position": round(sum(positions) / len(positions), 1) if positions else None,
-                "top_position": min(positions) if positions else None,
-                "keywords": len(positions),
-                "est_traffic": sum(kw.get("sum_traffic", 0) or 0 for kw in keywords),
-            })
+        for snapshot_date in self._monthly_dates(months):      # sequential: stops at the first refusal
+            m = self.get_url_summary(url, snapshot_date)
+            records.append({"date": pd.to_datetime(snapshot_date), "avg_position": float("nan"),
+                            "top_position": float("nan"), "keywords": int(m.get("org_keywords") or 0),
+                            "top3": int(m.get("org_keywords_1_3") or 0), "est_traffic": float(m.get("org_traffic") or 0)})
         return pd.DataFrame(records).sort_values("date").reset_index(drop=True) if records else pd.DataFrame()
 
     def get_snapshot_history(self, url: str, months: int = 6) -> pd.DataFrame:
-        """Two snapshots (start of look-back, now): avg position, keyword count, top-10 count, est. traffic."""
+        """Two snapshots (start of look-back, now) from the page summary: keyword count, top-3 count, traffic estimate.
+        50 units per snapshot (a keyword list of 100 rows cost 1,200). Position and top-10 come from Search Console."""
         rows = []
         for snap in snapshot_dates(months):
-            kws = self.get_url_keywords_at_date(url, snap)
-            pos = [k["best_position"] for k in kws if k.get("best_position")]
-            rows.append({
-                "date": pd.to_datetime(snap),
-                "avg_position": round(sum(pos) / len(pos), 1) if pos else None,
-                "keywords": len(pos), "top10": sum(1 for p in pos if p <= 10),
-                "est_traffic": sum(k.get("sum_traffic", 0) or 0 for k in kws),
-            })
+            m = self.get_url_summary(url, snap)
+            rows.append({"date": pd.to_datetime(snap), "avg_position": float("nan"),
+                         "keywords": int(m.get("org_keywords") or 0), "top3": int(m.get("org_keywords_1_3") or 0),
+                         "est_traffic": float(m.get("org_traffic") or 0)})
         return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
 
+    def get_url_summary(self, url: str, date: str) -> dict:
+        ep, params = self._summary_at_date(url, date)
+        return self._get(ep, params).get("metrics", {})
+
     def get_landing_page_metrics(self, url: str) -> dict:
-        keywords = self.get_url_keywords(url)
-        if not keywords:
-            return {"avg_position": None, "top_position": None, "est_traffic": 0, "keywords": 0}
-        positions = [kw["best_position"] for kw in keywords if kw.get("best_position")]
-        traffic = sum(kw.get("sum_traffic", 0) for kw in keywords)
-        return {
-            "avg_position": round(sum(positions) / len(positions), 1) if positions else None,
-            "top_position": min(positions) if positions else None,
-            "est_traffic": traffic,
-            "keywords": len(keywords),
-        }
+        m = self.get_url_summary(url, self.today)
+        return {"avg_position": None, "top_position": None, "est_traffic": float(m.get("org_traffic") or 0),
+                "keywords": int(m.get("org_keywords") or 0), "top3": int(m.get("org_keywords_1_3") or 0)}
 
     def enrich_landing_pages(self, urls: list) -> dict:
         return {u: self.get_landing_page_metrics(u) for u in urls}      # sequential: stops at the first refusal

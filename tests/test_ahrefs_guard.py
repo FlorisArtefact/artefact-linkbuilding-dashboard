@@ -97,3 +97,24 @@ def test_pending_counts_drop_when_stored(api):
 
 def test_blocked_is_runtime_error(api):
     assert issubclass(guard.AhrefsBlocked, RuntimeError)
+
+
+def test_monthly_budget_is_per_client_and_blocks(api, monkeypatch):
+    calls, _ = api
+    monkeypatch.setenv("AHREFS_DAILY_CAP", "1000")
+    monkeypatch.setenv("AHREFS_MONTHLY_UNITS", "100")           # 2 summary requests of 50 units
+    guard.set_client("A")
+    ahrefs_client.guarded_get("k", "site-explorer/metrics", {"a": 1})
+    ahrefs_client.guarded_get("k", "site-explorer/metrics", {"a": 2})
+    assert guard.status()["units_used"] == 100
+    with pytest.raises(guard.AhrefsBlocked):
+        ahrefs_client.guarded_get("k", "site-explorer/metrics", {"a": 3})
+    guard.set_client("B")                                       # another client has its own budget
+    assert guard.status()["units_used"] == 0
+    ahrefs_client.guarded_get("k", "site-explorer/metrics", {"a": 3})
+    guard.set_client("default")
+    assert len(calls) == 3
+
+
+def test_keyword_rows_are_costed_per_row():
+    assert guard.estimate_units("x", {"keywords": [{}] * 100}) == 1200 and guard.estimate_units("x", {"metrics": {}}) == 50

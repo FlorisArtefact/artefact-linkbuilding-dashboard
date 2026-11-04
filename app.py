@@ -262,6 +262,8 @@ def load_config() -> dict:
 config    = load_config()
 LANGUAGES = config.get("languages", ["NL", "EN", "DE"])
 CLIENT    = config.get("client_name", "Client")
+from modules import ahrefs_guard as _ahrefs_guard
+_ahrefs_guard.set_client(CLIENT)
 
 # Resolve credentials path relative to project root — needed by Sheets, GSC API and GA4
 _creds_file = os.path.join(
@@ -339,7 +341,7 @@ with st.sidebar:
     st.markdown(f"{'🟢' if ahrefs_ok else '🔴'} Ahrefs API {'(connected)' if ahrefs_ok else '(no key)'}")
     if ahrefs_ok and not demo_mode:
         from modules.ahrefs_ui import render_status as _ahrefs_status
-        _ahrefs_status()
+        _ahrefs_status(ahrefs_key)
 
     # Search Console — API is automatic, CSV upload only as a fallback
     st.markdown("**📊 Search Console data**")

@@ -27,6 +27,25 @@ class AhrefsBlocked(RuntimeError):
     """Raised instead of calling Ahrefs: paused, daily cap reached, or breaker tripped."""
 
 
+CLIENT = os.getenv("AHREFS_CLIENT", "default")   # the app sets this from the client config: budgets are per client
+
+
+def set_client(name: str) -> None:
+    global CLIENT
+    CLIENT = (name or "default").strip() or "default"
+
+
+def monthly_budget() -> int:
+    """Credits (API units) one client may use per calendar month through this app."""
+    return int(os.getenv("AHREFS_MONTHLY_UNITS", "200000"))
+
+
+def estimate_units(endpoint: str, data) -> int:
+    """Measured 2026-11-04: any request costs at least 50 units; keyword rows cost ~12 each (keyword+position+traffic)."""
+    rows = len(data.get("keywords", [])) if isinstance(data, dict) else 0
+    return max(50, rows * 12)
+
+
 def daily_cap() -> int:
     return int(os.getenv("AHREFS_DAILY_CAP", "300"))
 
@@ -77,7 +96,7 @@ def _read_state() -> dict:
         s = {}
     if s.get("day") != date.today().isoformat():
         s = {"day": date.today().isoformat(), "calls": 0, "blocked_until": s.get("blocked_until", 0),
-             "reason": s.get("reason", "")}
+             "reason": s.get("reason", ""), "units": s.get("units", {})}
     return s
 
 
@@ -89,10 +108,18 @@ def _write_state(s: dict) -> None:
         pass
 
 
+def _month_units(s: dict) -> int:
+    m = s.get("units", {})
+    return int(m.get(CLIENT, 0)) if m.get("_month") == date.today().strftime("%Y-%m") else 0
+
+
 def status() -> dict:
     s = _read_state()
     blocked = s.get("blocked_until", 0) > time.time()
+    used = _month_units(s)
     return {"enabled": enabled(), "calls": s["calls"], "cap": daily_cap(), "remaining": max(daily_cap() - s["calls"], 0),
+            "client": CLIENT, "units_used": used, "units_budget": monthly_budget(),
+            "units_remaining": max(monthly_budget() - used, 0),
             "blocked": blocked, "reason": s.get("reason", "") if blocked else "",
             "blocked_minutes": max(int((s.get("blocked_until", 0) - time.time()) / 60) + 1, 0) if blocked else 0}
 
@@ -103,6 +130,9 @@ def check_allowed() -> None:
         raise AhrefsBlocked("Ahrefs is on hold (set AHREFS_ENABLED=1 to switch it on). Only stored results are shown.")
     if st["blocked"]:
         raise AhrefsBlocked(f"Ahrefs calls are paused for {st['blocked_minutes']} more minutes ({st['reason']}).")
+    if st["units_remaining"] <= 0:
+        raise AhrefsBlocked(f"Monthly Ahrefs budget of {st['units_budget']:,} credits for {st['client']} is used up. "
+                            "Stored results still work; raise AHREFS_MONTHLY_UNITS to continue.")
     if st["remaining"] <= 0:
         raise AhrefsBlocked(f"Daily Ahrefs limit of {st['cap']} requests reached. Stored results still work.")
 
@@ -111,6 +141,17 @@ def register_call() -> None:
     with _lock:
         s = _read_state()
         s["calls"] += 1
+        _write_state(s)
+
+
+def register_units(n: int) -> None:
+    with _lock:
+        s = _read_state()
+        u = s.get("units", {})
+        if u.get("_month") != date.today().strftime("%Y-%m"):
+            u = {"_month": date.today().strftime("%Y-%m")}
+        u[CLIENT] = int(u.get(CLIENT, 0)) + int(n)
+        s["units"] = u
         _write_state(s)
 
 

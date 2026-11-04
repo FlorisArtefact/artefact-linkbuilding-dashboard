@@ -132,7 +132,7 @@ def demo_ranking_history(urls: list, months: int = 6) -> dict:
             pos = max(1.5, start - gain * prog + rng.uniform(-1, 1))
             kw = int(40 + 25 * prog + rng.uniform(-5, 5))
             rows.append({"date": now - pd.Timedelta(days=30 * i), "avg_position": round(pos, 1), "keywords": kw,
-                         "top10": int(kw * max(0.02, (24 - pos) / 80)), "est_traffic": int(kw * rng.uniform(2, 5) * (1 + prog))})
+                         "top10": int(kw * max(0.02, (24 - pos) / 80)), "top3": int(kw * max(0.01, (14 - pos) / 90)), "est_traffic": int(kw * rng.uniform(2, 5) * (1 + prog))})
         out[u] = pd.DataFrame(rows)
     return out
 

@@ -15,10 +15,10 @@
     "FR": "braceletsmartwatch.fr"
   },
   "gsc_properties": {
-    "NL": "https://smartwatchbanden.nl/",
-    "EN": "https://smartwatch-straps.co.uk/",
-    "DE": "https://smartwatcharmbaender.de/",
-    "FR": "https://braceletsmartwatch.fr/"
+    "NL": "sc-domain:smartwatchbanden.nl",
+    "EN": "sc-domain:smartwatch-straps.co.uk",
+    "DE": "sc-domain:smartwatcharmbaender.de",
+    "FR": "sc-domain:braceletsmartwatch.fr"
   },
   "ga4": {
     "property_id": "",
