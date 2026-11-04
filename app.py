@@ -337,6 +337,9 @@ with st.sidebar:
 
     ahrefs_ok = bool(ahrefs_key)
     st.markdown(f"{'🟢' if ahrefs_ok else '🔴'} Ahrefs API {'(connected)' if ahrefs_ok else '(no key)'}")
+    if ahrefs_ok and not demo_mode:
+        from modules.ahrefs_ui import render_status as _ahrefs_status
+        _ahrefs_status()
 
     # Search Console — API is automatic, CSV upload only as a fallback
     st.markdown("**📊 Search Console data**")
@@ -664,46 +667,52 @@ if use_ga4 and any(not d.empty for d in ga4_data.values()):
 # ── Business value & budget advice (generic ROI module) ────────────────────────
 # Fallback value basis while GA4 / Search Console are not connected: Ahrefs organic traffic
 # estimate of the linked landing pages (monthly). Only fetched when there is no better source.
-@st.cache_data(ttl=3600, show_spinner=False)
 def _ahrefs_monthly_traffic(api_key: str, urls: tuple) -> float:
-    """Sum of Ahrefs monthly organic traffic estimates for the given URLs (parallel, cached 1h)."""
-    from concurrent.futures import ThreadPoolExecutor
+    """Sum of Ahrefs monthly organic traffic estimates for the given URLs (sequential; stored on disk by ahrefs_guard)."""
     client = AhrefsClient(api_key)
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        return float(sum(m["est_traffic"] for m in pool.map(client.get_landing_page_metrics, urls)))
+    return float(sum(client.get_landing_page_metrics(u)["est_traffic"] for u in urls))
 
 
 _ahrefs_monthly = {}
 _est_possible = bool(ahrefs_key and not demo_mode and gsc_df.empty and not any(not d.empty for d in ga4_data.values()))
 # Opt-in: the estimate needs one Ahrefs request per landing page (slow the first time), so the page loads fast without it.
 if _est_possible and st.session_state.get("ahrefs_est"):
-    with st.spinner("Estimating organic traffic via Ahrefs..."):
-        for _lang in LANGUAGES:
-            _df = live_data.get(_lang, pd.DataFrame())
-            if not _df.empty and "Link to" in _df.columns:
-                _ahrefs_monthly[_lang] = _ahrefs_monthly_traffic(
-                    ahrefs_key, tuple(sorted(_df["Link to"].dropna().unique())))
+    try:
+        with st.spinner("Estimating organic traffic via Ahrefs..."):
+            for _lang in LANGUAGES:
+                _df = live_data.get(_lang, pd.DataFrame())
+                if not _df.empty and "Link to" in _df.columns:
+                    _ahrefs_monthly[_lang] = _ahrefs_monthly_traffic(
+                        ahrefs_key, tuple(sorted(_df["Link to"].dropna().unique())))
+    except RuntimeError as _e:
+        _ahrefs_monthly = {}
+        st.warning(str(_e))
 
 
 tabs_main = st.tabs(["🏆 Effect on organic", "💶 Return on investment", "📈 Results", "🌍 Reach (referral & mentions)",
                      "🔗 Links & health", "🔬 Page deep-dive"])
 # ── Effect on organic: linked pages vs. not linked vs. whole domain, authority ──────────
-@st.cache_data(ttl=21600, show_spinner=False)
 def _domain_histories(api_key: str, domains: tuple) -> dict:
     from modules.ahrefs_client import get_domain_history
     return {d: get_domain_history(api_key, d) for d in domains}
 
 
+tabs_main[0].__enter__()
 if demo_mode:
     _hist = {l: demo_data.demo_domain_history(l, raw_links.get(l)) for l in LANGUAGES}
     _gscm = {l: demo_data.demo_gsc_monthly(l) for l in LANGUAGES}
 else:
     _doms = {l: config.get("domains", {}).get(l, "") for l in LANGUAGES}
-    _hh = _domain_histories(ahrefs_key, tuple(d for d in _doms.values() if d)) if ahrefs_key else {}
+    _hh = {}
+    if ahrefs_key:
+        from modules.ahrefs_client import pending_domain_history
+        from modules.ahrefs_ui import gated as _gated
+        _dom_list = tuple(d for d in _doms.values() if d)
+        _hh = _gated("ev_load", "Domain authority and traffic history (Ahrefs)", pending_domain_history(_dom_list),
+                     lambda: _domain_histories(ahrefs_key, _dom_list)) or {}
     _hist = {l: _hh.get(_doms[l]) for l in LANGUAGES}
     _gscm = {l: get_gsc_monthly(_creds_file, config.get("gsc_properties", {}).get(l, "")) for l in LANGUAGES} if use_gsc_api else {}
 
-tabs_main[0].__enter__()
 evidence_headline = render_evidence_section(
     per_lang={l: {"monthly": monthly_data.get(l), "links": raw_links.get(l, pd.DataFrame())} for l in LANGUAGES},
     langs=LANGUAGES, domains=config.get("domains", {}), history=_hist, gsc_monthly=_gscm, currency="€",
@@ -1004,9 +1013,12 @@ for i, lang in enumerate(LANGUAGES):
             lp_table["Ahrefs Traffic"] = lp_table["Landing Page"].map(lambda u: _demo_ah.get(u, {}).get("est_traffic"))
             lp_table["Keywords"] = lp_table["Landing Page"].map(lambda u: _demo_ah.get(u, {}).get("keywords"))
         elif ahrefs_client and not lp_table.empty:
-            with st.spinner("Fetching Ahrefs data..."):
-                urls        = lp_table["Landing Page"].dropna().tolist()
-                ahrefs_data = ahrefs_client.enrich_landing_pages(urls)
+            from modules.ahrefs_ui import gated as _gated_lp
+            urls        = lp_table["Landing Page"].dropna().tolist()
+            ahrefs_data = _gated_lp(f"lp_load_{lang}", f"Ahrefs columns for {lang} landing pages",
+                                    ahrefs_client.pending_landing(urls),
+                                    lambda: ahrefs_client.enrich_landing_pages(urls))
+            if ahrefs_data:
                 lp_table["Ahrefs Avg. Pos."] = lp_table["Landing Page"].map(
                     lambda u: ahrefs_data.get(u, {}).get("avg_position")
                 )
@@ -1159,15 +1171,13 @@ def render_impact_analysis():
             if demo_mode:
                 ahrefs_history = demo_data.demo_position_history(ia_url, ia_months)
             elif ahrefs_client:
-                cache_key = f"pos_hist_{ia_url}_{ia_months}"
-                if cache_key not in st.session_state:
-                    short = ia_url.rstrip("/").split("/")[-1] or ia_url
-                    with st.spinner(f"Ahrefs: fetching {ia_months} monthly snapshots for {short}..."):
-                        try:
-                            st.session_state[cache_key] = ahrefs_client.get_position_history(ia_url, ia_months)
-                        except RuntimeError:
-                            st.warning("Ahrefs did not answer (rate limit?). Try again in a minute.")
-                ahrefs_history = st.session_state.get(cache_key, pd.DataFrame())
+                from modules.ahrefs_ui import gated as _gated_ia
+                ahrefs_history = _gated_ia(
+                    f"ia_load_{ia_months}", f"Ahrefs position history ({ia_months} months)",
+                    ahrefs_client.pending_position_history(ia_url, ia_months),
+                    lambda: ahrefs_client.get_position_history(ia_url, ia_months))
+                if ahrefs_history is None:
+                    ahrefs_history = pd.DataFrame()
 
             has_data = (
                 (not ahrefs_history.empty and ahrefs_history["avg_position"].notna().any())
@@ -1286,13 +1296,6 @@ def render_impact_analysis():
                         s4.metric("Avg. DA of placed links", f"{avg_link_da:.0f}",
                                   help="Average Domain Authority of the domains that placed links. "
                                        "Higher DA = more authority transferred to the landing page.")
-
-                if ahrefs_client:
-                    if st.button("🔄 Refresh (clears cache)", key="refresh_impact"):
-                        cache_key = f"pos_hist_{ia_url}_{ia_months}"
-                        if cache_key in st.session_state:
-                            del st.session_state[cache_key]
-                        st.rerun()
 
                 if gsc_history.empty:
                     st.caption(

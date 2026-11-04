@@ -13,17 +13,11 @@ STATUS_TXT = {"improving": ("🟢", "Improving"), "stable": ("⚪", "Stable"), "
               "declining": ("⚪", "Mixed to weaker"), "unknown": ("⚪", "No data yet")}
 
 
-@st.cache_data(ttl=21600, show_spinner=False)   # 6 h — cached per URL, so switching market reuses earlier fetches
-def _fetch_one(api_key: str, url: str, months: int):
-    from modules.ahrefs_client import AhrefsClient
-    return AhrefsClient(api_key).get_snapshot_history(url, months)
-
-
 def _fetch_history(api_key: str, urls: tuple, months: int) -> dict:
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results = list(pool.map(lambda u: _fetch_one(api_key, u, months), urls))
-    return dict(zip(urls, results))
+    """Sequential on purpose: stops at the first refusal. Every result is also stored on disk (ahrefs_guard)."""
+    from modules.ahrefs_client import AhrefsClient
+    client = AhrefsClient(api_key)
+    return {u: client.get_snapshot_history(u, months) for u in urls}
 
 
 def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags: dict,
@@ -60,9 +54,8 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
 
     months = st.slider("Look back (months)", 3, 12, 6, key="rk_months",
                        help="How far back to compare. The campaign has been running for about six months.")
-    n_calls = sum(len(per_lang[l]["urls"]) for l in langs) * (months + 1)
-
     history_by_lang = {}
+    ahrefs_missing = False
     if demo_mode:
         for l in langs:
             history_by_lang[l] = demo_data.demo_ranking_history(per_lang[l]["urls"], months)
@@ -70,14 +63,14 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
         st.info("Add the Ahrefs API key to load ranking history (Search Console will replace this once connected).")
         return result
     else:
-        try:
-            with st.spinner(f"Fetching ranking history from Ahrefs… (first time ~{n_calls} requests, then cached for 6 hours)"):
-                for l in langs:
-                    history_by_lang[l] = _fetch_history(api_key, tuple(sorted(per_lang[l]["urls"])), months)
-        except RuntimeError:
-            st.warning("Ahrefs did not answer (most likely its rate limit). Nothing was stored; reload in a minute to try again. "
-                       "Search Console numbers do not depend on it.")
-            return result
+        from modules.ahrefs_client import AhrefsClient
+        from modules.ahrefs_ui import gated
+        all_urls = tuple(sorted({u for l in langs for u in per_lang[l]["urls"]}))
+        pending = AhrefsClient(api_key).pending_snapshots(all_urls, months)
+        loaded = gated("rk_load", "Ahrefs ranking history", pending,
+                       lambda: {l: _fetch_history(api_key, tuple(sorted(per_lang[l]["urls"])), months) for l in langs})
+        history_by_lang = loaded if loaded is not None else {l: {} for l in langs}
+        ahrefs_missing = loaded is None
 
     # Search Console windows: the same look-back, as whole calendar months (start month vs. last complete month)
     now_m = pd.Timestamp.today().normalize().replace(day=1) - pd.DateOffset(months=1)
@@ -99,7 +92,9 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
             ca, cg = st.columns(2)
             with ca:
                 st.caption("**Ahrefs** · modelled")
-                if s["status"] == "unknown":
+                if ahrefs_missing:
+                    st.caption("Not loaded (see the button above).")
+                elif s["status"] == "unknown":
                     st.caption("Not enough ranking data.")
                 else:
                     st.metric("Avg. position", f"{s['pos_now']:.1f}", delta=f"{s['pos_change']:+.1f} places",
@@ -140,7 +135,8 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
     fig = go.Figure()
     for i, l in enumerate(langs):
         a = aggs[l]
-        a = a[a["avg_position"].notna()]
+        if not a.empty:
+            a = a[a["avg_position"].notna()]
         if not a.empty:
             fig.add_trace(go.Scatter(x=a["date"], y=a["avg_position"], mode="lines+markers", name=l,
                                      line=dict(color=LANG_COLORS[i % len(LANG_COLORS)], width=3)))
@@ -150,7 +146,8 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
         margin=dict(t=45, b=30, l=50, r=20), hovermode="x unified", legend=dict(orientation="h", y=-0.15),
         yaxis=dict(autorange="reversed", gridcolor="#E8ECF2", zeroline=False, title="Avg. position"),
         xaxis=dict(showgrid=False))
-    st.plotly_chart(fig, width="stretch")
+    if not ahrefs_missing:
+        st.plotly_chart(fig, width="stretch")
 
     # ── all URLs together ──
     with st.expander("📋 All pages we build links to — position then vs. now"):

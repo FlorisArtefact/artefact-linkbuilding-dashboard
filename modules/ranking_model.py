@@ -93,4 +93,6 @@ def per_url_table(history: dict) -> pd.DataFrame:
                      "Change": float(a["avg_position"] - d.iloc[-1]["avg_position"]) if pd.notna(d.iloc[-1]["avg_position"]) else None,
                      "Traffic start": float(d.iloc[0]["est_traffic"]), "Traffic now": float(d.iloc[-1]["est_traffic"]),
                      "Top-10 kw now": int(d.iloc[-1]["top10"])})
+    if not rows:
+        return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("Change", ascending=False, na_position="last").reset_index(drop=True)
