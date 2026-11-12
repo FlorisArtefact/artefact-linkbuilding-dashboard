@@ -125,7 +125,9 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                       help="Sessions are steadier month to month; revenue is what the business cares about.")
     headline = None
     if not have:
-        st.info("💡 Waiting for GA4 (monthly organic revenue per page). The authority view below already works with Ahrefs.")
+        from modules.ahrefs_ui import client_view as _cv3
+        st.info("💡 Monthly organic revenue per page is not connected yet, so the year-over-year comparison cannot be shown." if _cv3() else
+                "💡 Waiting for GA4 (monthly organic revenue per page). The authority view below already works with Ahrefs.")
     else:
         sel = have if market == "All markets" else [market]
         monthly, links = combine(per_lang, sel)
@@ -247,7 +249,7 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                           xaxis=dict(showgrid=False))
         st.plotly_chart(fig, width="stretch")
     elif dom_market and not demo_mode:
-        st.caption(f"Search Console history for {dom_market} is not available (no access yet).")
+        st.caption(f"Search Console history for {dom_market} is not connected yet.")
 
     with st.expander("🧭 How to read this: what else moves organic results"):
         st.markdown(

@@ -56,7 +56,7 @@ def render_referral_section(per_lang: dict, flags: dict, demo_mode: bool, period
             frames.append(t)
     have_data = any(d.get("referral") is not None and not d["referral"].empty for d in per_lang.values())
     if not have_data:
-        st.info("💡 Waiting for GA4. Once connected, this shows how many visitors, and how much revenue, arrive via "
+        st.info("💡 Visitor and revenue data is not connected yet. Once it is, this shows how many visitors, and how much revenue, arrive via "
                 "the articles where we placed links — per site and per market.")
         return
     if not frames:

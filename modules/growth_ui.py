@@ -25,7 +25,7 @@ def render_growth_section(per_lang: dict, categories: dict | None, currency: str
 
     available = {l: d for l, d in per_lang.items() if d.get("monthly") is not None and not d["monthly"].empty}
     if not available:
-        st.info("💡 Waiting for GA4 history. Once the service account has access, this section shows the monthly "
+        st.info("💡 Revenue history is not connected yet. Once it is, this section shows the monthly "
                 "**organic revenue** per landing page, per category and for the whole domain — with the date of every "
                 "placed link — and whether linked pages grew faster than the rest of the site.")
         return None

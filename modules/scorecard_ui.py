@@ -36,7 +36,7 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
         cards.append(_card("Is the budget visible in revenue?", "Not yet visible", f"Revenue ≈ {base:.1f}x budget{ind} on the linked pages. "
                            "Links also lift the whole domain and act with a delay.", AMBER)); known += 1
     else:
-        cards.append(_card("Is the budget visible in revenue?", "Not enough data", "Needs GA4 revenue (or a traffic estimate) and spend.", GREY))
+        cards.append(_card("Is the budget visible in revenue?", "Not enough data", "Needs revenue data (or a traffic estimate) and spend.", GREY))
 
     # 2) Organic growth — year-over-year evidence first (seasonality-free), before/after growth as fallback
     ev_ = evidence or {}
@@ -62,7 +62,7 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
             cards.append(_card("Do we see organic growth?", "In line with the domain", txt, GREY))
         known += 1
     else:
-        cards.append(_card("Do we see organic growth?", "Waiting for GA4", "Needs monthly organic revenue per page (GA4).", GREY))
+        cards.append(_card("Do we see organic growth?", "Revenue data pending", "Needs monthly organic revenue per page; it is not connected yet.", GREY))
 
     # 3) Rankings
     st_ = (ranking or {}).get("status", "unknown")
@@ -84,9 +84,9 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
         known += 1
         positive += 1 if st_ == "improving" else 0
     else:
-        cards.append(_card("Are rankings getting better?", "No data", "Needs the Ahrefs key and linked pages in the selected market.", GREY))
+        cards.append(_card("Are rankings getting better?", "No data yet", "Needs placed links in the selected market and ranking data.", GREY))
 
-    st.markdown('<div class="section-title">🎯 Campaign scorecard — is link building paying off?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🎯 Campaign scorecard — what the signals say so far</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sc-wrap">{"".join(cards)}</div>', unsafe_allow_html=True)
     caveat = ""
     out_ = (growth or {}).get("Outperformance")
