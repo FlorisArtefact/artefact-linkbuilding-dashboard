@@ -659,26 +659,41 @@ if not CLIENT_MODE:
 
 
 # ── Global KPIs ────────────────────────────────────────────────────────────────
+_pipe = pd.concat([d for d in opp_data.values() if d is not None and not d.empty], ignore_index=True) \
+    if any(d is not None and not d.empty for d in opp_data.values()) else pd.DataFrame()
 c1, c2, c3, c4 = st.columns(4)
-c1.metric(
-    "Live links placed", total_links,
-    help="Total number of live backlinks placed in the selected period, across all languages."
-)
-c2.metric(
-    "Total investment", fmt_eur(total_cost),
-    help="Sum of all costs for placed backlinks in the filtered period."
-)
-c3.metric(
-    "Avg. Domain Authority", f"{avg_da:.0f}" if pd.notna(avg_da) and avg_da > 0 else "—",
-    help="Domain Authority (DA) is a Moz score (0–100) measuring a domain's authority. "
-         "A higher DA means more authority and therefore more SEO value for the backlink. "
-         "This is the average DA of all domains linking to your pages."
-)
-c4.metric(
-    "Dofollow %", f"{dofollow_pct:.0f}%",
-    help="Dofollow links pass 'link juice' to the target page and are directly valuable for SEO. "
-         "Nofollow links do not. A higher dofollow percentage is better for organic rankings."
-)
+if total_links == 0 and not _pipe.empty:
+    # Nothing placed yet (new client / new site): show the plan instead of four empty tiles, clearly labelled.
+    _appr = int(_pipe["Approved?"].notna().sum()) if "Approved?" in _pipe.columns else 0
+    _price = pd.to_numeric(_pipe["Price"], errors="coerce") if "Price" in _pipe.columns else pd.Series(dtype=float)
+    _dr = pd.to_numeric(_pipe["DR"], errors="coerce") if "DR" in _pipe.columns else pd.Series(dtype=float)
+    c1.metric("Domains in pipeline", len(_pipe), help="Domains proposed for link building. Nothing is placed yet.")
+    c2.metric("Proposed budget", fmt_eur(_price.sum()) if _price.notna().any() else "—",
+              help="Sum of the prices in the proposal. Not spent yet: the investment only counts placed links.")
+    c3.metric("Avg. DR of proposed domains", f"{_dr.mean():.0f}" if _dr.notna().any() else "—",
+              help="Average Ahrefs Domain Rating of the proposed domains.")
+    c4.metric("Approved so far", _appr, help="Proposed domains marked as approved. No links are placed yet.")
+    st.caption("No links are placed yet, so these figures describe the proposal, not results.")
+else:
+    c1.metric(
+        "Live links placed", total_links,
+        help="Total number of live backlinks placed in the selected period, across all languages."
+    )
+    c2.metric(
+        "Total investment", fmt_eur(total_cost),
+        help="Sum of all costs for placed backlinks in the filtered period."
+    )
+    c3.metric(
+        "Avg. Domain Authority", f"{avg_da:.0f}" if pd.notna(avg_da) and avg_da > 0 else "—",
+        help="Domain Authority (DA) is a Moz score (0–100) measuring a domain's authority. "
+             "A higher DA means more authority and therefore more SEO value for the backlink. "
+             "This is the average DA of all domains linking to your pages."
+    )
+    c4.metric(
+        "Dofollow %", f"{dofollow_pct:.0f}%",
+        help="Dofollow links pass 'link juice' to the target page and are directly valuable for SEO. "
+             "Nofollow links do not. A higher dofollow percentage is better for organic rankings."
+    )
 # ── GA4 business-impact KPIs (only shown once GA4 is connected) ────────────────
 # Scope is explicit: selected market(s), organic search, and the period set by the Year/Quarter/Month filters (PERIOD_*).
 # Whole site vs. the pages that received links are split.
@@ -828,7 +843,9 @@ with scorecard_box:
 
 # ── Overview: links per language + costs ───────────────────────────────────────
 tabs_main[4].__enter__()
-st.metric("Links to check", broken_links, delta=f"{broken_links} ⚠️" if broken_links else "All good", delta_color="inverse",
+st.metric("Links to check", broken_links if total_links else "—",
+          delta=(f"{broken_links} ⚠️" if broken_links else "All good") if total_links else "Nothing placed yet",
+          delta_color="inverse" if total_links else "off",
           help="Number of backlinks returning a non-200 HTTP status code (e.g. 403 or 404). "
                "The link may have been removed or blocked. Contact the publisher to resolve this.")
 st.markdown('<div class="section-title">Overview by language</div>', unsafe_allow_html=True)
