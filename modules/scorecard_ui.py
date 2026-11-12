@@ -29,14 +29,14 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
     base = ((roi_total or {}).get("scenarios", {}).get("base", {}) or {}).get("roi")
     ind = " (indicative — traffic estimate)" if (roi_total or {}).get("mode") == "traffic" else ""
     if adv == "increase":
-        cards.append(_card("Does it pay back?", "Covers its cost", f"Return on linked pages ≈ {base:.1f}x{ind}.", GREEN)); positive += 1; known += 1
+        cards.append(_card("Is the budget visible in revenue?", "Revenue above budget", f"Linked pages bring ≈ {base:.1f}x their link budget{ind}. An indication, not proof of cause.", GREEN)); positive += 1; known += 1
     elif adv == "maintain":
-        cards.append(_card("Does it pay back?", "Around break-even", f"Return ≈ {base:.1f}x{ind}. Direction unclear yet.", AMBER)); known += 1
+        cards.append(_card("Is the budget visible in revenue?", "Around break-even", f"Revenue ≈ {base:.1f}x budget{ind}. Direction unclear yet.", AMBER)); known += 1
     elif adv == "decrease":
-        cards.append(_card("Does it pay back?", "Not yet visible", f"Return ≈ {base:.1f}x{ind} on the linked pages. "
+        cards.append(_card("Is the budget visible in revenue?", "Not yet visible", f"Revenue ≈ {base:.1f}x budget{ind} on the linked pages. "
                            "Links also lift the whole domain and act with a delay.", AMBER)); known += 1
     else:
-        cards.append(_card("Does it pay back?", "Not enough data", "Needs GA4 revenue (or a traffic estimate) and spend.", GREY))
+        cards.append(_card("Is the budget visible in revenue?", "Not enough data", "Needs GA4 revenue (or a traffic estimate) and spend.", GREY))
 
     # 2) Organic growth — year-over-year evidence first (seasonality-free), before/after growth as fallback
     ev_ = evidence or {}
@@ -91,8 +91,8 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
     caveat = ""
     out_ = (growth or {}).get("Outperformance")
     if adv == "increase" and (vd == "slowing" or (not vd and out_ is not None and out_ <= -0.10)):
-        caveat = (' <br><b>Note:</b> the payback figure credits 100% of the linked pages revenue to link building, while those '
-                  'pages are growing slower than the domain. Treat the return as an <b>upper bound</b>, not as proof.')
+        caveat = (' <br><b>Note:</b> the revenue-vs-budget figure counts 100% of the linked pages revenue, while those '
+                  'pages are growing slower than the domain. Treat it as an <b>upper bound</b>, not as proof.')
     if known:
         st.markdown(f'<div class="sc-sum">Read together: <b>{positive} of {known}</b> available signals point the right way. '
                     f'This is direction, not proof — links work with a delay and rankings and revenue also depend on content, '

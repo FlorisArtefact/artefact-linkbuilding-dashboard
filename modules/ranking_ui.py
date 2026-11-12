@@ -61,7 +61,9 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
             history_by_lang[l] = demo_data.demo_ranking_history(per_lang[l]["urls"], months)
     elif not api_key:
         ahrefs_missing = True
-        st.info("No Ahrefs key: only the Search Console side is shown.")
+        from modules.ahrefs_ui import client_view as _cv
+        if not _cv():
+            st.info("No Ahrefs key: only the Search Console side is shown.")
     else:
         from modules.ahrefs_client import AhrefsClient
         from modules.ahrefs_ui import gated
@@ -119,7 +121,9 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
             with ca:
                 st.caption("**Ahrefs** · modelled")
                 if ahrefs_missing:
-                    st.caption("Not loaded (see the button above)." if api_key else "No Ahrefs key.")
+                    from modules.ahrefs_ui import client_view as _cv2
+                    st.caption("Not part of this report yet." if _cv2() else
+                               ("Not loaded (see the button above)." if api_key else "No Ahrefs key."))
                 elif agg.empty or s["traffic_start"] is None:
                     st.caption("Not enough Ahrefs data.")
                 else:

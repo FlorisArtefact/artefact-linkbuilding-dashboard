@@ -4,7 +4,22 @@ import streamlit as st
 from modules import ahrefs_guard as guard
 
 
+_CLIENT_VIEW = False
+
+
+def set_client_view(flag: bool) -> None:
+    """Client view: no credit counters, no load buttons. Stored results are still shown."""
+    global _CLIENT_VIEW
+    _CLIENT_VIEW = bool(flag)
+
+
+def client_view() -> bool:
+    return _CLIENT_VIEW
+
+
 def render_status(api_key: str = "") -> None:
+    if _CLIENT_VIEW:
+        return
     s = guard.status()
     if not s["enabled"]:
         st.warning("**Ahrefs is on hold.** No Ahrefs requests are made; only results stored earlier are shown. "
@@ -38,6 +53,8 @@ def gated(key: str, what: str, pending: int, fetch):
         except RuntimeError as e:
             st.warning(str(e))
             return None
+    if _CLIENT_VIEW:
+        return None                       # clients never trigger or see Ahrefs fetches
     s = guard.status()
     if not s["enabled"] or s["blocked"]:
         st.info(f"{what}: not loaded. " + ("Ahrefs is on hold." if not s["enabled"] else f"Ahrefs paused ({s['reason']})."))

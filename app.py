@@ -240,8 +240,10 @@ AXIS_NO_GRID = dict(showgrid=False, zeroline=False)
 
 
 # ── Load config ────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
-def load_config() -> dict:
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_config() -> dict:   # not cached: a fallback must never get stuck for the whole server life
     # Multi-client hosting: each deployed app carries its OWN client config in its secrets
     # (CLIENT_CONFIG_JSON = the content of that client's config.json). That keeps client names,
     # sheet IDs and domains out of the repo, so one codebase can serve many isolated apps.
@@ -254,6 +256,8 @@ def load_config() -> dict:
     if raw:
         return json.loads(raw)
     cfg_path = os.getenv("CONFIG_FILE", "config.json")      # e.g. clients/hellofresh.json for local testing
+    if not os.path.isabs(cfg_path):
+        cfg_path = os.path.join(_APP_DIR, cfg_path)         # independent of the folder the server was started from
     if os.path.exists(cfg_path):
         with open(cfg_path, encoding="utf-8") as f:
             return json.load(f)
@@ -264,6 +268,19 @@ LANGUAGES = config.get("languages", ["NL", "EN", "DE"])
 CLIENT    = config.get("client_name", "Client")
 from modules import ahrefs_guard as _ahrefs_guard
 _ahrefs_guard.set_client(CLIENT)
+
+# View mode: "client" hides everything internal (credits, load buttons, set-up, assumptions). It is set per deployment
+# (env var / secret / config), never by a URL parameter, so a client cannot switch to the analyst view.
+try:
+    _vm = st.secrets.get("VIEW_MODE", "")
+except Exception:
+    _vm = ""
+CLIENT_MODE = str(_vm or os.getenv("VIEW_MODE") or config.get("view_mode", "admin")).strip().lower() == "client"
+from modules import ahrefs_ui as _ahrefs_ui
+_ahrefs_ui.set_client_view(CLIENT_MODE)
+_boot = st.empty()
+_boot.info("⏳ Loading the dashboard — data is fetched from the sheet, Search Console and Analytics. "
+           "The first load can take a couple of minutes; after that it is fast.")
 
 # Resolve credentials path relative to project root — needed by Sheets, GSC API and GA4
 _creds_file = os.path.join(
@@ -277,7 +294,10 @@ _sheet_id = config.get("google_sheets", {}).get("spreadsheet_id", "")
 with st.sidebar:
     st.markdown(f"<div style='font-size:1.25rem;font-weight:700;color:{NAVY};line-height:1.1'>Artefact</div>", unsafe_allow_html=True)
     st.markdown(f"<div style='font-size:0.75rem;color:{MID};margin-bottom:.6rem;'>Linkbuilding ROI dashboard</div>", unsafe_allow_html=True)
-    _sb_filters, _sb_setup = st.tabs(["🔍 Filters", "⚙️ Set-up"])
+    if CLIENT_MODE:
+        _sb_filters, _sb_setup = st.container(), st.container()   # set-up stays empty for clients
+    else:
+        _sb_filters, _sb_setup = st.tabs(["🔍 Filters", "⚙️ Set-up"])
     # Filters first (what a client touches); everything technical lives under Set-up (analyst).
     _sb_filters.__enter__()
     # — Filters
@@ -291,147 +311,162 @@ with st.sidebar:
 
 
     # — ROI assumptions (generic ROI & budget-advice module)
-    roi_assumptions = sidebar_assumptions(config)
+    if CLIENT_MODE:
+        from modules.roi_model import merged_assumptions as _merged
+        roi_assumptions = _merged(config.get("roi"))
+    else:
+        roi_assumptions = sidebar_assumptions(config)
     _sb_filters.__exit__(None, None, None)
     _sb_setup.__enter__()
-    # — Data source
-    st.markdown("**📂 Data source**")
-    demo_mode = st.toggle(
-        "🧪 Demo data", value=bool(config.get("demo_mode", False)),
-        help="Shows the dashboard with SYNTHETIC data — no credentials needed. Never show demo numbers as real results.",
-    )
-    use_sheets = sheets_available(config) and not demo_mode
-
-    if demo_mode:
-        st.warning("DEMO MODE — all data is synthetic")
-        excel_source = None
-    elif use_sheets:
-        sid = config["google_sheets"]["spreadsheet_id"]
-        st.success("🟢 Google Sheets (live)")
-        st.caption("Auto-refreshes every 5 minutes")
-        with st.expander("Sheet details"):
-            st.markdown(f"[Open Google Sheet](https://docs.google.com/spreadsheets/d/{sid})")
-            st.caption(f"ID: `{sid}`")
-        if st.button("🔄 Refresh now", key="refresh_sheets"):
-            st.cache_data.clear()
-            st.rerun()
-        excel_source = None   # not used when Sheets is active
+    if CLIENT_MODE:
+        demo_mode = bool(config.get("demo_mode", False))
+        use_sheets = sheets_available(config) and not demo_mode
+        _dp = config.get("excel_path", "")
+        excel_source = _dp if (not use_sheets and not demo_mode and _dp and os.path.exists(_dp)) else None
+        ahrefs_key = os.getenv("AHREFS_API_KEY", "")
+        use_gsc_api = gsc_api_available(config, _creds_file)
+        gsc_csv = None
+        use_ga4 = ga4_available(config, _creds_file)
+        ga4_csvs = {}
     else:
-        uploaded_excel = st.file_uploader("Upload Excel database", type=["xlsx"], label_visibility="collapsed")
-        default_path = config.get("excel_path", "")
-        if uploaded_excel:
-            excel_source = uploaded_excel
-            st.success("Excel loaded ✓")
-        elif default_path and os.path.exists(default_path):
-            excel_source = default_path
-            st.caption(f"Using: {os.path.basename(default_path)}")
-        else:
-            excel_source = None
-
-
-    # — APIs
-    st.markdown("**🔌 API connections**")
-    ahrefs_key = os.getenv("AHREFS_API_KEY", "")
-    if not ahrefs_key:
-        ahrefs_key = st.text_input("Ahrefs API key", type="password", placeholder="Bearer token")
-        if ahrefs_key:
-            os.environ["AHREFS_API_KEY"] = ahrefs_key
-
-    ahrefs_ok = bool(ahrefs_key)
-    st.markdown(f"{'🟢' if ahrefs_ok else '🔴'} Ahrefs API {'(connected)' if ahrefs_ok else '(no key)'}")
-    if ahrefs_ok and not demo_mode:
-        from modules.ahrefs_ui import render_status as _ahrefs_status
-        _ahrefs_status(ahrefs_key)
-
-    # Search Console — API is automatic, CSV upload only as a fallback
-    st.markdown("**📊 Search Console data**")
-    use_gsc_api = gsc_api_available(config, _creds_file)
-    if use_gsc_api:
-        st.success("🟢 Search Console API (configured)")
-        st.caption("Auto-refreshes every 6 hours — no manual work needed. "
-                   "Shows no data until the service account is granted access in Search Console.")
-        with st.expander("📎 No API access yet? Upload exports (CSV/ZIP)"):
-            st.caption("Per market: Performance → Pages → Export (CSV or ZIP, last 3 months). "
-                       "Used only while the API returns no data. Upload all markets together.")
-            gsc_csv = st.file_uploader("GSC exports", type=["csv", "zip"], accept_multiple_files=True,
-                                       key="gsc_csv_multi", label_visibility="collapsed")
-    else:
-        gsc_csv = st.file_uploader(
-            "Upload GSC export (Pages CSV)",
-            type=["csv"],
-            help="In GSC: Performance → Pages → Export as CSV",
-            label_visibility="collapsed",
+        # — Data source
+        st.markdown("**📂 Data source**")
+        demo_mode = st.toggle(
+            "🧪 Demo data", value=bool(config.get("demo_mode", False)),
+            help="Shows the dashboard with SYNTHETIC data — no credentials needed. Never show demo numbers as real results.",
         )
-        st.caption("🔴 Manual upload (configure the API to automate this)")
-        with st.expander("How to connect the API instead?"):
-            st.info(
-                "1. Enable **Search Console API** in Google Cloud (same project as Sheets)\n"
-                "2. In Search Console: Settings → Users and permissions → Add user →\n"
-                "   paste the service account email → Restricted (read-only)\n"
-                "3. Add the site URL(s) under `gsc_properties` in config.json\n\n"
-                "Once set up, this upload disappears and data refreshes automatically."
+        use_sheets = sheets_available(config) and not demo_mode
+
+        if demo_mode:
+            st.warning("DEMO MODE — all data is synthetic")
+            excel_source = None
+        elif use_sheets:
+            sid = config["google_sheets"]["spreadsheet_id"]
+            st.success("🟢 Google Sheets (live)")
+            st.caption("Auto-refreshes every 5 minutes")
+            with st.expander("Sheet details"):
+                st.markdown(f"[Open Google Sheet](https://docs.google.com/spreadsheets/d/{sid})")
+                st.caption(f"ID: `{sid}`")
+            if st.button("🔄 Refresh now", key="refresh_sheets"):
+                st.cache_data.clear()
+                st.rerun()
+            excel_source = None   # not used when Sheets is active
+        else:
+            uploaded_excel = st.file_uploader("Upload Excel database", type=["xlsx"], label_visibility="collapsed")
+            default_path = config.get("excel_path", "")
+            if uploaded_excel:
+                excel_source = uploaded_excel
+                st.success("Excel loaded ✓")
+            elif default_path and os.path.exists(default_path):
+                excel_source = default_path
+                st.caption(f"Using: {os.path.basename(default_path)}")
+            else:
+                excel_source = None
+
+
+        # — APIs
+        st.markdown("**🔌 API connections**")
+        ahrefs_key = os.getenv("AHREFS_API_KEY", "")
+        if not ahrefs_key:
+            ahrefs_key = st.text_input("Ahrefs API key", type="password", placeholder="Bearer token")
+            if ahrefs_key:
+                os.environ["AHREFS_API_KEY"] = ahrefs_key
+
+        ahrefs_ok = bool(ahrefs_key)
+        st.markdown(f"{'🟢' if ahrefs_ok else '🔴'} Ahrefs API {'(connected)' if ahrefs_ok else '(no key)'}")
+        if ahrefs_ok and not demo_mode:
+            from modules.ahrefs_ui import render_status as _ahrefs_status
+            _ahrefs_status(ahrefs_key)
+
+        # Search Console — API is automatic, CSV upload only as a fallback
+        st.markdown("**📊 Search Console data**")
+        use_gsc_api = gsc_api_available(config, _creds_file)
+        if use_gsc_api:
+            st.success("🟢 Search Console API (configured)")
+            st.caption("Auto-refreshes every 6 hours — no manual work needed. "
+                       "Shows no data until the service account is granted access in Search Console.")
+            with st.expander("📎 No API access yet? Upload exports (CSV/ZIP)"):
+                st.caption("Per market: Performance → Pages → Export (CSV or ZIP, last 3 months). "
+                           "Used only while the API returns no data. Upload all markets together.")
+                gsc_csv = st.file_uploader("GSC exports", type=["csv", "zip"], accept_multiple_files=True,
+                                           key="gsc_csv_multi", label_visibility="collapsed")
+        else:
+            gsc_csv = st.file_uploader(
+                "Upload GSC export (Pages CSV)",
+                type=["csv"],
+                help="In GSC: Performance → Pages → Export as CSV",
+                label_visibility="collapsed",
             )
+            st.caption("🔴 Manual upload (configure the API to automate this)")
+            with st.expander("How to connect the API instead?"):
+                st.info(
+                    "1. Enable **Search Console API** in Google Cloud (same project as Sheets)\n"
+                    "2. In Search Console: Settings → Users and permissions → Add user →\n"
+                    "   paste the service account email → Restricted (read-only)\n"
+                    "3. Add the site URL(s) under `gsc_properties` in config.json\n\n"
+                    "Once set up, this upload disappears and data refreshes automatically."
+                )
 
-    # Revenue & conversions — Google Analytics 4
-    st.markdown("**💰 Revenue & conversions (GA4)**")
-    use_ga4 = ga4_available(config, _creds_file)
-    ga4_csvs = {}
-    if use_ga4:
-        st.success("🟢 Google Analytics 4 (live)")
-        st.caption("Revenue, conversions & ROI per landing page")
-    else:
-        st.caption("🔴 GA4 not connected")
-        with st.expander("How to connect GA4?"):
-            st.info(
-                "1. Enable **Google Analytics Data API** in Google Cloud (same project as Sheets)\n"
-                "2. In GA4: Admin → Property Access Management → Add users →\n"
-                "   paste the service account email → role: Viewer\n"
-                "3. Add the GA4 Property ID under `ga4.property_id` in config.json"
-            )
-        with st.expander("📎 Or upload a GA4 export (CSV)"):
-            st.caption("Per market: last 90 days, dimensions *Landing page + query string* and "
-                       "*Session default channel group*, metrics *Sessions*, *Key events*, *Total revenue*.")
-            for _l in LANGUAGES:
-                ga4_csvs[_l] = st.file_uploader(f"GA4 export {_l}", type=["csv"], key=f"ga4csv_{_l}")
+        # Revenue & conversions — Google Analytics 4
+        st.markdown("**💰 Revenue & conversions (GA4)**")
+        use_ga4 = ga4_available(config, _creds_file)
+        ga4_csvs = {}
+        if use_ga4:
+            st.success("🟢 Google Analytics 4 (live)")
+            st.caption("Revenue, conversions & ROI per landing page")
+        else:
+            st.caption("🔴 GA4 not connected")
+            with st.expander("How to connect GA4?"):
+                st.info(
+                    "1. Enable **Google Analytics Data API** in Google Cloud (same project as Sheets)\n"
+                    "2. In GA4: Admin → Property Access Management → Add users →\n"
+                    "   paste the service account email → role: Viewer\n"
+                    "3. Add the GA4 Property ID under `ga4.property_id` in config.json"
+                )
+            with st.expander("📎 Or upload a GA4 export (CSV)"):
+                st.caption("Per market: last 90 days, dimensions *Landing page + query string* and "
+                           "*Session default channel group*, metrics *Sessions*, *Key events*, *Total revenue*.")
+                for _l in LANGUAGES:
+                    ga4_csvs[_l] = st.file_uploader(f"GA4 export {_l}", type=["csv"], key=f"ga4csv_{_l}")
 
 
-    # — Share
-    st.markdown("**🔗 Share this dashboard**")
-    import socket
-    try:
-        local_ip = socket.gethostbyname(socket.gethostname())
-    except Exception:
-        local_ip = "10.52.130.204"
+        # — Share
+        st.markdown("**🔗 Share this dashboard**")
+        import socket
+        try:
+            local_ip = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            local_ip = "10.52.130.204"
 
-    with st.expander("📡 How to share with colleagues"):
-        st.markdown(f"""
-**Same network (office / VPN)**
-Your colleague opens this URL in their browser:
-```
-http://{local_ip}:8502
-```
-Works as long as you are on the same network.
+        with st.expander("📡 How to share with colleagues"):
+            st.markdown(f"""
+    **Same network (office / VPN)**
+    Your colleague opens this URL in their browser:
+    ```
+    http://{local_ip}:8502
+    ```
+    Works as long as you are on the same network.
 
----
+    ---
 
-**Outside the network — ngrok (free, temporary)**
-1. Download [ngrok.com](https://ngrok.com/download)
-2. Open a new terminal window
-3. Run: `ngrok http 8502`
-4. Copy the `https://xxxx.ngrok.io` URL
-5. Share it — anyone can access it
+    **Outside the network — ngrok (free, temporary)**
+    1. Download [ngrok.com](https://ngrok.com/download)
+    2. Open a new terminal window
+    3. Run: `ngrok http 8502`
+    4. Copy the `https://xxxx.ngrok.io` URL
+    5. Share it — anyone can access it
 
----
+    ---
 
-**Always online — Streamlit Cloud (free)**
-1. Push this project to a GitHub repo (private)
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your repo → deploy
-4. Add your Ahrefs API key under *App settings → Secrets*
-""")
+    **Always online — Streamlit Cloud (free)**
+    1. Push this project to a GitHub repo (private)
+    2. Go to [share.streamlit.io](https://share.streamlit.io)
+    3. Connect your repo → deploy
+    4. Add your Ahrefs API key under *App settings → Secrets*
+    """)
 
-    st.divider()
-    st.caption(f"Client: **{CLIENT}**  \nGenerated: {datetime.now().strftime('%d-%m-%Y %H:%M')}")
+        st.divider()
+        st.caption(f"Client: **{CLIENT}**  \nGenerated: {datetime.now().strftime('%d-%m-%Y %H:%M')}")
     _sb_setup.__exit__(None, None, None)
 
 
@@ -588,6 +623,8 @@ quarter_label = selected_quarter if selected_quarter != "All" else "All quarters
 if selected_month != "All":
     quarter_label = f"{selected_month}"
 data_badge    = "🧪 Demo data" if demo_mode else ("🟢 Live · Google Sheets" if use_sheets else "📁 Excel")
+if CLIENT_MODE and not demo_mode:
+    data_badge = f"Updated {datetime.now().strftime('%d-%m-%Y')}"
 with header_box:
     st.markdown(f"""
 <div class="dash-header">
@@ -609,12 +646,13 @@ def _chip(ok: bool, label: str, unlocks: str = "") -> str:
 
 
 _ga4_ok = bool(any(not d.empty for d in ga4_data.values()))
-st.markdown('<div class="status-strip">'
-            + _chip(True, "Links & costs", "")
-            + _chip(bool(ahrefs_key) or demo_mode, "Ahrefs rankings", "add API key")
-            + _chip(_ga4_ok or demo_mode, "GA4 revenue", "unlocks real ROI, growth, referral visitors")
-            + _chip(bool(demo_mode or not gsc_df.empty), "Search Console", "unlocks click & position trend")
-            + '</div>', unsafe_allow_html=True)
+if not CLIENT_MODE:
+    st.markdown('<div class="status-strip">'
+                + _chip(True, "Links & costs", "")
+                + _chip(bool(ahrefs_key) or demo_mode, "Ahrefs rankings", "add API key")
+                + _chip(_ga4_ok or demo_mode, "GA4 revenue", "unlocks real ROI, growth, referral visitors")
+                + _chip(bool(demo_mode or not gsc_df.empty), "Search Console", "unlocks click & position trend")
+                + '</div>', unsafe_allow_html=True)
 
 
 # ── Global KPIs ────────────────────────────────────────────────────────────────
@@ -691,7 +729,7 @@ if _est_possible and st.session_state.get("ahrefs_est"):
         st.warning(str(_e))
 
 
-tabs_main = st.tabs(["🏆 Effect on organic", "💶 Return on investment", "📈 Results", "🌍 Reach (referral & mentions)",
+tabs_main = st.tabs(["🏆 Effect on organic", "💶 Revenue vs. budget", "📈 Results", "🌍 Reach (referral & mentions)",
                      "🔗 Links & health", "🔬 Page deep-dive"])
 # ── Effect on organic: linked pages vs. not linked vs. whole domain, authority ──────────
 def _domain_histories(api_key: str, domains: tuple) -> dict:
@@ -995,7 +1033,7 @@ for i, lang in enumerate(LANGUAGES):
 | **GSC Position** | Average Google Search position (source: Search Console — connects automatically once configured) |
 | **Revenue (GA4)** | Total revenue attributed to this landing page (source: Google Analytics 4) |
 | **Conversions** | Number of conversions/goal completions on this page (source: GA4) |
-| **ROI** | Revenue divided by link-building cost for this page — above 1.0x means the links paid for themselves |
+| **ROI** | Revenue divided by link-building cost for this page — above 1.0x means the revenue of the linked page is higher than its link budget (an indication, not proof that the links caused it) |
 
 > **Tip:** Low avg. DA + poor GSC position = more high-quality links needed. High DA + strong position + high ROI = campaign is working.
 """)
@@ -1319,3 +1357,6 @@ st.markdown(f"""
     {datetime.now().strftime('%d-%m-%Y')}
 </div>
 """, unsafe_allow_html=True)
+
+
+_boot.empty()   # loading notice is gone once the whole page is built

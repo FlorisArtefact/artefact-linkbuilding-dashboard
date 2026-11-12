@@ -103,7 +103,7 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
         for s in (("base",) if same else SCENARIOS):
             r = total["scenarios"][s]
             cls = "roi-tile base" if s == "base" else "roi-tile"
-            lab = (f'Return · {r["share"]:.0%} of page revenue credited to links' if same
+            lab = (f'Revenue vs. budget · {r["share"]:.0%} of page revenue counted' if same
                    else f'{SCENARIO_LABELS[s]} · {r["share"]:.0%} credited to links')
             tiles += (f'<div class="{cls}"><div class="lab">{lab}</div>'
                       f'<div class="big">{_roi_txt(r["roi"])}</div>'

@@ -233,7 +233,9 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                    "domains and traffic are the more sensitive signals. Referring domains also grow from links outside this "
                    "campaign. Ahrefs numbers are estimates." + (" **DEMO DATA.**" if demo_mode else ""))
     else:
-        st.info("Ahrefs history is not loaded for this domain (use the load button above, once Ahrefs is switched on).")
+        from modules.ahrefs_ui import client_view
+        st.info("Domain authority history is not part of this report yet." if client_view() else
+                "Ahrefs history is not loaded for this domain (use the load button above, once Ahrefs is switched on).")
     g = gsc_monthly.get(dom_market)
     if g is not None and not g.empty:
         fig = go.Figure(go.Scatter(x=g["month"], y=g["Clicks"], mode="lines+markers", line=dict(color=TEAL, width=3), name="Clicks"))
