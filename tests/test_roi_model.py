@@ -62,3 +62,10 @@ def test_linked_page_metrics_matching():
 def test_sensitivity_grid_shape():
     shares, mults, z = sensitivity_grid(1000, 5000, 0, 90, A)
     assert len(z) == len(mults) and all(len(row) == len(shares) for row in z)
+
+
+def test_no_conversion_value_means_no_made_up_euros():
+    # A client without a known conversion value (e.g. showroom visits) must not get a traffic-based euro figure.
+    a = merged_assumptions({"value_per_conversion": 0})
+    r = compute_roi(1000, revenue_window=0, traffic_window=3000, window_days=90, assumptions=a)
+    assert r["mode"] is None and r["advice"]["key"] == "unknown"

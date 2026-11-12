@@ -129,8 +129,8 @@ def compute_roi(
 
     if revenue_window and revenue_window > 0:
         mode = "revenue"
-    elif traffic_window and traffic_window > 0:
-        mode = "traffic"
+    elif traffic_window and traffic_window > 0 and float(a.get("value_per_conversion") or 0) > 0:
+        mode = "traffic"       # only with a conversion value; a client without one (e.g. showroom visits) gets no made-up euros
     else:
         mode = None
 

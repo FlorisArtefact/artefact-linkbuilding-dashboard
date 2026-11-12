@@ -58,8 +58,9 @@ def sidebar_assumptions(config: dict) -> dict:
         ])
         a["conversion_rate"] = {"low": crs[0] / 100, "base": crs[1] / 100, "high": crs[2] / 100}
         a["value_per_conversion"] = st.number_input(
-            f"Value per conversion ({a['currency_symbol']})", 1.0, 100000.0, float(a["value_per_conversion"]), 5.0,
-            key="roi_vpc", help="Average order value (webshop) or average lead value (B2B).")
+            f"Value per conversion ({a['currency_symbol']})", 0.0, 100000.0, float(a["value_per_conversion"]), 5.0,
+            key="roi_vpc", help="Average order value (webshop) or average lead value (B2B). 0 = no value known: "
+                                "no indicative return is then calculated from traffic.")
     return a
 
 

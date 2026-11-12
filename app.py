@@ -264,6 +264,9 @@ def load_config() -> dict:   # not cached: a fallback must never get stuck for t
     return {"client_name": "Client", "languages": ["NL", "EN", "DE"], "currency": "EUR"}
 
 config    = load_config()
+_xp = config.get("excel_path", "")
+if _xp and not os.path.isabs(_xp):
+    config["excel_path"] = os.path.normpath(os.path.join(_APP_DIR, _xp))   # relative paths count from the app folder
 LANGUAGES = config.get("languages", ["NL", "EN", "DE"])
 CLIENT    = config.get("client_name", "Client")
 from modules import ahrefs_guard as _ahrefs_guard
@@ -873,12 +876,30 @@ tabs       = st.tabs(tab_labels)
 
 ahrefs_client = AhrefsClient(ahrefs_key) if (ahrefs_key and not demo_mode) else None
 
+
+def _render_pipeline(lang: str, expanded: bool = False) -> None:
+    """Domains proposed for link building. Also shown when nothing is live yet (new client / new site)."""
+    opp = opp_data.get(lang, pd.DataFrame())
+    if opp.empty:
+        return
+    with st.expander(f"🎯 Opportunities pipeline — {lang} ({len(opp)})", expanded=expanded):
+        approved    = opp[opp["Approved?"].notna()].copy() if "Approved?" in opp.columns else pd.DataFrame()
+        st.caption(f"Total in pipeline: **{len(opp)}** &nbsp;·&nbsp; Approved: **{len(approved)}**")
+        if "Price" in opp.columns and opp["Price"].notna().any():
+            st.caption(f"Proposed budget in this list: **{fmt_eur(opp['Price'].sum())}** "
+                       f"(not spent yet; the investment above only counts placed links)")
+        opp_cols    = ["Domain", "DR", "Topic", "Price", "Proposed month", "Approved?", "Link to", "Anchor"]
+        avail_opp   = [c for c in opp_cols if c in opp.columns]
+        st.dataframe(opp[avail_opp], width="stretch", hide_index=True)
+
+
 for i, lang in enumerate(LANGUAGES):
     with tabs[i]:
         df = live_data.get(lang, pd.DataFrame())
 
         if df.empty:
             st.info(f"No live links found for {lang} with the current filters.")
+            _render_pipeline(lang, expanded=True)
             continue
 
         # Per-language KPIs
@@ -1101,14 +1122,7 @@ for i, lang in enumerate(LANGUAGES):
                 width="stretch", hide_index=True,
             )
 
-        opp = opp_data.get(lang, pd.DataFrame())
-        if not opp.empty:
-            with st.expander(f"🎯 Opportunities pipeline — {lang} ({len(opp)})"):
-                approved    = opp[opp["Approved?"].notna()].copy() if "Approved?" in opp.columns else pd.DataFrame()
-                st.caption(f"Total in pipeline: **{len(opp)}** &nbsp;·&nbsp; Approved: **{len(approved)}**")
-                opp_cols    = ["Domain", "DR", "Topic", "Price", "Proposed month", "Approved?", "Link to", "Anchor"]
-                avail_opp   = [c for c in opp_cols if c in opp.columns]
-                st.dataframe(opp[avail_opp], width="stretch", hide_index=True)
+        _render_pipeline(lang)
 
 
 # ── Broken links section ───────────────────────────────────────────────────────
