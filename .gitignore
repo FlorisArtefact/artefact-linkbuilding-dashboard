@@ -19,7 +19,11 @@ __pycache__/
 # config.json holds only IDs/settings, no secrets -> keep tracked
 !config.json
 !config.example.json
-!clients/*.json
 .cache/
 
 site/
+
+# Public repo: other clients' configs and local helpers stay on this machine
+clients/
+tools/start-dashboards.cmd
+*.html

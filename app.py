@@ -136,8 +136,17 @@ def _check_password() -> bool:
             st.error("Incorrect password — please try again.")
     return False
 
+def _access_mode() -> str:
+    """'streamlit_viewers' in config.json = access is handled by Streamlit Cloud's own viewer list (private app,
+    invite by e-mail). The in-app password screen is then skipped so viewers only sign in once."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json"), encoding="utf-8") as f:
+            return str(json.load(f).get("access", "")).strip().lower()
+    except Exception:
+        return ""
+
 _login_ok = _check_login()
-if _login_ok is False or (_login_ok is None and not _check_password()):
+if _login_ok is False or (_login_ok is None and _access_mode() != "streamlit_viewers" and not _check_password()):
     st.stop()
 
 # ── Brand colors ───────────────────────────────────────────────────────────────
@@ -255,7 +264,7 @@ def load_config() -> dict:   # not cached: a fallback must never get stuck for t
     raw = raw or os.getenv("CLIENT_CONFIG_JSON", "")
     if raw:
         return json.loads(raw)
-    cfg_path = os.getenv("CONFIG_FILE", "config.json")      # e.g. clients/hellofresh.json for local testing
+    cfg_path = os.getenv("CONFIG_FILE", "config.json")      # e.g. clients/<client>.json for local testing
     if not os.path.isabs(cfg_path):
         cfg_path = os.path.join(_APP_DIR, cfg_path)         # independent of the folder the server was started from
     if os.path.exists(cfg_path):
@@ -278,7 +287,9 @@ try:
     _vm = st.secrets.get("VIEW_MODE", "")
 except Exception:
     _vm = ""
-CLIENT_MODE = str(_vm or os.getenv("VIEW_MODE") or config.get("view_mode", "admin")).strip().lower() == "client"
+# On Streamlit Cloud (code under /mount/src) the default is the client view: that URL is what clients open.
+_ON_CLOUD = os.path.abspath(__file__).replace("\\", "/").startswith("/mount/src")
+CLIENT_MODE = str(_vm or os.getenv("VIEW_MODE") or config.get("view_mode", "client" if _ON_CLOUD else "admin")).strip().lower() == "client"
 from modules import ahrefs_ui as _ahrefs_ui
 _ahrefs_ui.set_client_view(CLIENT_MODE)
 _boot = st.empty()

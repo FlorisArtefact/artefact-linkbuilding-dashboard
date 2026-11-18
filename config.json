@@ -30,6 +30,7 @@
     }
   },
   "demo_mode": false,
+  "access": "streamlit_viewers",
   "roi": {
     "horizon_months": 12,
     "attribution_share": {

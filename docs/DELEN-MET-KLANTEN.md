@@ -4,7 +4,7 @@ Stand 13-11-2026. Doel: elke klant een link met toegang via e-mail of wachtwoord
 
 ## 1. Snapshot maken (jij of Claude, lokaal)
 ```
-python tools/export_snapshot.py --config clients/hornbach.json --out site/hornbach
+python tools/export_snapshot.py --config clients/<klant>.json --out site/<klant>
 python tools/export_snapshot.py --config config.json --out site/bwj
 python tools/export_snapshot.py --config config.example.json --out site/demo     # demodata, voor de eerste test
 ```

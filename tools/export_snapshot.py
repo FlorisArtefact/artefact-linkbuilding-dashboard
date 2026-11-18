@@ -4,7 +4,7 @@ The dashboard runs headless (Streamlit AppTest) in client view, once per market,
 (tiles, text, tables, charts, tabs, expanders) is written to HTML. No server, no API calls, no Ahrefs credits:
 only results already stored are used. Works for any client config.
 
-    python tools/export_snapshot.py --config clients/hornbach.json --out site/hornbach
+    python tools/export_snapshot.py --config clients/<client>.json --out site/<client>
     python tools/export_snapshot.py --config config.example.json --out site/demo      # demo data
 
 The result is a snapshot: filters other than the market switch are fixed at their defaults.
