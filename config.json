@@ -1,5 +1,6 @@
 {
   "client_name": "BWJ - Smartwatch Banden",
+  "logo": "assets/bwj-logo.png",
   "excel_path": "data/BWJ-Database_NL_EN_DE_LB_Artefact.xlsx",
   "languages": [
     "NL",

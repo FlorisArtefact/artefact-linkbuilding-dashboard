@@ -148,7 +148,7 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                            help="Last 3 complete months versus the same 3 months a year earlier.")
             if s.get("above_control_value") is not None:
                 v = s["above_control_value"]
-                k[3].metric("Linked pages vs. trend of unlinked pages", (f"{'+' if v >= 0 else '-'}{cur}{abs(v):,.0f}"),
+                k[3].metric("Extra vs. unlinked trend, last 3 months", (f"{'+' if v >= 0 else '-'}{cur}{abs(v):,.0f}"),
                             help="Last 3 months: what the linked pages did minus what they would have done if they had followed the "
                                  "growth of the pages WITHOUT links. An estimate: homepage and category links also lift the unlinked "
                                  "pages, so the real effect is probably larger than this number.")
@@ -215,7 +215,7 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
     dom_market = market if market in langs else (langs[0] if langs else None)
     if len(langs) > 1:
         dom_market = st.selectbox("Domain", langs, index=langs.index(dom_market) if dom_market in langs else 0,
-                                  key="ev_dom_market", format_func=lambda l: f"{flags.get(l, '')} {l} · {domains.get(l, '')}")
+                                  key="ev_dom_market", format_func=lambda l: f"{flags.get(l, '')} {l} · {domains.get(l, '')}".strip(" ·"))
     h = history.get(dom_market)
     start = ev.campaign_start(per_lang.get(dom_market, {}).get("links"))
     if h is not None and not h.empty:
@@ -236,8 +236,8 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                    "campaign. Ahrefs numbers are estimates." + (" **DEMO DATA.**" if demo_mode else ""))
     else:
         from modules.ahrefs_ui import client_view
-        st.info("Domain authority history is not part of this report yet." if client_view() else
-                "Ahrefs history is not loaded for this domain (use the load button above, once Ahrefs is switched on).")
+        if not client_view():     # client view: simply leave the block out instead of announcing it is missing
+            st.info("Ahrefs history is not loaded for this domain (use the load button above, once Ahrefs is switched on).")
     g = gsc_monthly.get(dom_market)
     if g is not None and not g.empty:
         fig = go.Figure(go.Scatter(x=g["month"], y=g["Clicks"], mode="lines+markers", line=dict(color=TEAL, width=3), name="Clicks"))

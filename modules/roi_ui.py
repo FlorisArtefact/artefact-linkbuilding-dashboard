@@ -179,7 +179,7 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
     for lang, inv, m, res in rows:
         sc = res["scenarios"]
         table.append({
-            "Market": f"{flags.get(lang, '🌐')} {lang}", "Budget": _money(a, inv or 0),
+            "Market": f"{flags.get(lang, '')} {lang}".strip(), "Budget": _money(a, inv or 0),
             "Basis": {"revenue": "GA4 revenue", "traffic": "Traffic estimate", None: "—"}[res["mode"]],
             "Revenue vs. budget (cautious)": _x(sc["low"]["roi"]),
             "Revenue vs. budget (realistic)": _x(sc["base"]["roi"]),
@@ -230,14 +230,16 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
             "- **Budget does not need to return 100 %.** Treat revenue vs. budget as a compass: is the direction good, and where "
             "does the money work best?\n"
             "- **“Credited to links” (" + " / ".join(f"{a['attribution_share'][s]:.0%}" for s in SCENARIOS) + ")** is the share of organic revenue on the linked pages that we "
-            "assume is due to link building. It is an assumption to agree with the client and pillar leads."
+            "assume is due to link building. " + ("It is a working assumption." if _client else
+                                                  "It is an assumption to agree with the client and pillar leads.")
         )
 
     st.markdown('<div class="roi-disc">⚠️ <strong>Disclaimer.</strong> These are projections based on stated assumptions, '
                 'not guarantees. Google\'s algorithm is a black box and organic results depend on many factors besides link '
                 'building. Use the scenarios as decision support, not as a promise.</div>', unsafe_allow_html=True)
 
-    st.download_button("⬇️ Download management summary (.md)",
-                       management_summary_text(client, period_label, total, a, notes),
-                       file_name=f"management-summary-{client.split(' ')[0].lower()}.md", mime="text/markdown")
+    if not _client:   # analyst export; the client reads the summary on the page
+        st.download_button("⬇️ Download management summary (.md)",
+                           management_summary_text(client, period_label, total, a, notes),
+                           file_name=f"management-summary-{client.split(' ')[0].lower()}.md", mime="text/markdown")
     return total

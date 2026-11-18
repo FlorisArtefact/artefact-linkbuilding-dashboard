@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from modules.data_loader import (
     load_live_links,
+    normalize_link_targets,
     load_opportunities,
     apply_filters,
     get_landing_page_summary,
@@ -53,7 +54,7 @@ st.set_page_config(
     page_title="Linkbuilding Dashboard | Artefact",
     page_icon="🔗",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",   # open on desktop, closed on phones (otherwise it covers the dashboard)
 )
 
 # ── Optional "Sign in with Google" gate with an e-mail allow-list (per app) ─────
@@ -157,7 +158,8 @@ LIGHT  = "#F0F4F8"
 MID    = "#8B9BB4"
 WHITE  = "#FFFFFF"
 CHART_COLORS = [PINK, NAVY, TEAL, "#FF7043", "#7B1FA2"]
-FLAGS = {"NL": "🇳🇱", "EN": "🇬🇧", "DE": "🇩🇪", "FR": "🇫🇷", "ES": "🇪🇸", "IT": "🇮🇹"}
+# No flag emojis: Windows shows them as letters ("NL NL", "GB EN"), which looks broken. Market codes only.
+FLAGS: dict = {}
 
 # ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
@@ -177,6 +179,14 @@ html, body, [class*="css"] {{ font-family: 'Roboto', sans-serif; }}
 }}
 .dash-header h1 {{ color: white; margin: 0; padding: 0; font-size: 1.35rem; font-weight: 700; }}
 .dash-header .sub {{ color: rgba(255,255,255,0.72); font-size: 0.82rem; margin-top: 0.15rem; }}
+.header-right {{ display: flex; align-items: center; gap: 0.8rem; flex-shrink: 0; }}
+@media (max-width: 640px) {{
+    .dash-header {{ flex-direction: column; align-items: flex-start; gap: 0.7rem; }}
+    .dash-header h1 {{ font-size: 1.15rem; }}
+    .client-logo img {{ height: 30px; }}
+}}
+.client-logo {{ background: white; border-radius: 10px; padding: 0.3rem 0.7rem; display: flex; align-items: center; }}
+.client-logo img {{ height: 40px; width: auto; display: block; }}
 .artefact-pill {{
     background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.28);
     color: white; padding: 0.3rem 1rem; border-radius: 20px;
@@ -307,7 +317,7 @@ _sheet_id = config.get("google_sheets", {}).get("spreadsheet_id", "")
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(f"<div style='font-size:1.25rem;font-weight:700;color:{NAVY};line-height:1.1'>Artefact</div>", unsafe_allow_html=True)
-    st.markdown(f"<div style='font-size:0.75rem;color:{MID};margin-bottom:.6rem;'>Linkbuilding ROI dashboard</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:0.75rem;color:{MID};margin-bottom:.6rem;'>Linkbuilding dashboard</div>", unsafe_allow_html=True)
     if CLIENT_MODE:
         _sb_filters, _sb_setup = st.container(), st.container()   # set-up stays empty for clients
     else:
@@ -536,14 +546,32 @@ PERIOD_START, PERIOD_END = _p0.date().isoformat(), _p1.date().isoformat()
 PERIOD_DAYS = (_p1 - _p0).days + 1
 PERIOD_TXT = f"{_p0:%-d %b} – {_p1:%-d %b %Y}" if os.name != "nt" else f"{_p0.day} {_p0:%b} – {_p1.day} {_p1:%b %Y}"
 
+def page_label(url) -> str:
+    """Readable chart label: 'Homepage' or the last two path parts ('collections/apple-watch-bandjes')."""
+    path = urlparse(str(url)).path.strip("/")
+    return "Homepage" if not path else "/".join(path.split("/")[-2:])
+
+
+# All markets are fetched at the same time (first load went from ~2 minutes to a fraction of that).
+from modules.parallel import run_parallel
+_live_tab = config.get("google_sheets", {}).get("live_tab", "")
+_opp_tab = config.get("google_sheets", {}).get("opp_tab", "")
+_sheet_pre = {}
+if use_sheets and not demo_mode:
+    _res = run_parallel([(load_live_links_sheets, (_creds_file, _sheet_id, l, _live_tab), {}) for l in LANGUAGES]
+                        + [(load_opportunities_sheets, (_creds_file, _sheet_id, l, _opp_tab), {}) for l in LANGUAGES])
+    _sheet_pre = {("live", l): _res[i] for i, l in enumerate(LANGUAGES)}
+    _sheet_pre.update({("opp", l): _res[len(LANGUAGES) + i] for i, l in enumerate(LANGUAGES)})
+
 live_data, opp_data, raw_links = {}, {}, {}
 for lang in LANGUAGES:
     if demo_mode:
         raw = demo_data.demo_live_links(lang, selected_year)
     elif use_sheets:
-        raw = load_live_links_sheets(_creds_file, _sheet_id, lang, config.get("google_sheets", {}).get("live_tab", ""))
+        raw = _sheet_pre[("live", lang)]
     else:
         raw = load_live_links(excel_source, lang)
+    raw = normalize_link_targets(raw, config.get("domains", {}).get(lang, ""))
     raw_links[lang] = raw   # unfiltered: growth analysis needs the FIRST link ever to a page
     live_data[lang] = apply_filters(raw, year=selected_year, quarter=q_filter, campaign=camp_filter)
     if _month_no and not live_data[lang].empty and "LL Date" in live_data[lang].columns:
@@ -552,7 +580,7 @@ for lang in LANGUAGES:
     if demo_mode:
         opp_data[lang] = demo_data.demo_opportunities(lang)
     elif use_sheets:
-        opp_data[lang] = load_opportunities_sheets(_creds_file, _sheet_id, lang, config.get("google_sheets", {}).get("opp_tab", ""))
+        opp_data[lang] = _sheet_pre[("opp", lang)]
     else:
         opp_data[lang] = load_opportunities(excel_source, lang)
 
@@ -562,11 +590,25 @@ all_live = pd.concat(live_data.values(), ignore_index=True) if any(not d.empty f
 if demo_mode:
     gsc_df = pd.concat([demo_data.demo_gsc(l) for l in LANGUAGES], ignore_index=True)
 elif use_gsc_api:
-    _gsc_dfs = []
-    for lang in LANGUAGES:
-        site_url = config.get("gsc_properties", {}).get(lang, "")
-        if site_url:
-            _gsc_dfs.append(get_gsc_data_api(_creds_file, site_url))
+    _sites = [config.get("gsc_properties", {}).get(l, "") for l in LANGUAGES]
+    _sites = [x for x in _sites if x]
+    # Prefetch everything from Google at once: GSC pages + monthly clicks, and GA4 (revenue, referral, monthly).
+    _pre = [(get_gsc_data_api, (_creds_file, x), {}) for x in _sites] + [(get_gsc_monthly, (_creds_file, x), {}) for x in _sites]
+    _ga4_calls = {}
+    if use_ga4 and not demo_mode:
+        for _l in LANGUAGES:
+            _pid = get_ga4_property_id(config, _l)
+            if not _pid:
+                continue
+            _host = config.get("domains", {}).get(_l, "") if not config.get("ga4", {}).get("property_ids", {}).get(_l) else ""
+            _paths = tuple(sorted({urlparse(str(u).strip()).path or "/" for u in raw_links.get(_l, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).dropna()
+                                   if str(u).strip()}))
+            _ga4_calls[(_l, "rev")] = (get_revenue_by_page, (_creds_file, _pid), dict(hostname=_host, start_date=PERIOD_START, end_date=PERIOD_END))
+            _ga4_calls[(_l, "ref")] = (get_referral_traffic, (_creds_file, _pid), dict(hostname=_host, start_date=PERIOD_START, end_date=PERIOD_END))
+            _ga4_calls[(_l, "mon")] = (get_monthly_revenue_by_page, (_creds_file, _pid), dict(hostname=_host, paths=_paths))
+    _res = run_parallel(_pre + list(_ga4_calls.values()))
+    _gsc_dfs = _res[:len(_sites)]
+    _ga4_pre = dict(zip(_ga4_calls.keys(), _res[len(_pre):]))
     gsc_df = pd.concat(_gsc_dfs, ignore_index=True) if _gsc_dfs else pd.DataFrame()
     if gsc_df.empty and gsc_csv:   # API has no access yet -> fall back to uploaded exports
         _csv_dfs = [d for d in (load_gsc_csv(f) for f in gsc_csv) if not d.empty]
@@ -582,27 +624,23 @@ if demo_mode:
     ga4_data = {lang: demo_data.demo_ga4(lang) for lang in LANGUAGES}
     monthly_data = {lang: demo_data.demo_monthly(lang, raw_links.get(lang)) for lang in LANGUAGES}
 elif use_ga4:
+    # If all markets share ONE property (no per-language id), the calls filter on this market's domain (see prefetch).
+    if "_ga4_pre" not in globals():
+        _ga4_pre = {}
+        for _l in LANGUAGES:
+            _pid = get_ga4_property_id(config, _l)
+            if not _pid:
+                continue
+            _host = config.get("domains", {}).get(_l, "") if not config.get("ga4", {}).get("property_ids", {}).get(_l) else ""
+            _paths = tuple(sorted({urlparse(str(u).strip()).path or "/" for u in raw_links.get(_l, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).dropna()
+                                   if str(u).strip()}))
+            _ga4_pre[(_l, "rev")] = get_revenue_by_page(_creds_file, _pid, hostname=_host, start_date=PERIOD_START, end_date=PERIOD_END)
+            _ga4_pre[(_l, "ref")] = get_referral_traffic(_creds_file, _pid, hostname=_host, start_date=PERIOD_START, end_date=PERIOD_END)
+            _ga4_pre[(_l, "mon")] = get_monthly_revenue_by_page(_creds_file, _pid, hostname=_host, paths=_paths)
     for lang in LANGUAGES:
-        prop_id = get_ga4_property_id(config, lang)
-        # If all markets share ONE property (no per-language id), filter on this market's domain
-        _shared = not config.get("ga4", {}).get("property_ids", {}).get(lang)
-        ga4_data[lang] = (
-            get_revenue_by_page(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "",
-                                start_date=PERIOD_START, end_date=PERIOD_END)
-            if prop_id else pd.DataFrame()
-        )
-        referral_data[lang] = (
-            get_referral_traffic(_creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "",
-                                 start_date=PERIOD_START, end_date=PERIOD_END)
-            if prop_id else pd.DataFrame()
-        )
-        monthly_data[lang] = (
-            get_monthly_revenue_by_page(
-                _creds_file, prop_id, hostname=config.get("domains", {}).get(lang, "") if _shared else "",
-                paths=tuple(sorted({urlparse(str(u).strip()).path or "/" for u in raw_links.get(lang, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).dropna()
-                                    if str(u).strip()})))
-            if prop_id else pd.DataFrame()
-        )
+        ga4_data[lang] = _ga4_pre.get((lang, "rev"), pd.DataFrame())
+        referral_data[lang] = _ga4_pre.get((lang, "ref"), pd.DataFrame())
+        monthly_data[lang] = _ga4_pre.get((lang, "mon"), pd.DataFrame())
 elif any(ga4_csvs.values()):
     use_ga4 = True
     ga4_data = {lang: (load_ga4_csv(f) if f else pd.DataFrame()) for lang, f in ga4_csvs.items()}
@@ -639,6 +677,21 @@ if selected_month != "All":
 data_badge    = "🧪 Demo data" if demo_mode else ("🟢 Live · Google Sheets" if use_sheets else "📁 Excel")
 if CLIENT_MODE and not demo_mode:
     data_badge = f"Updated {datetime.now().strftime('%d-%m-%Y')}"
+def _client_logo_html() -> str:
+    """Client logo from config ("logo": path relative to the app folder), embedded so it also works in snapshots."""
+    path = config.get("logo", "")
+    if not path:
+        return ""
+    full = path if os.path.isabs(path) else os.path.join(_APP_DIR, path)
+    try:
+        import base64, mimetypes
+        mime = mimetypes.guess_type(full)[0] or "image/png"
+        with open(full, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        return f'<div class="client-logo"><img src="data:{mime};base64,{b64}" alt="{CLIENT}"></div>'
+    except OSError:
+        return ""
+
 with header_box:
     st.markdown(f"""
 <div class="dash-header">
@@ -646,7 +699,7 @@ with header_box:
         <h1>🔗 Linkbuilding Dashboard</h1>
         <div class="sub">{CLIENT} &nbsp;·&nbsp; {market_label} &nbsp;·&nbsp; {selected_year} &nbsp;·&nbsp; {quarter_label} &nbsp;·&nbsp; {data_badge}</div>
     </div>
-    <div class="artefact-pill">Artefact</div>
+    <div class="header-right">{_client_logo_html()}<div class="artefact-pill">Artefact</div></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -758,8 +811,10 @@ if _est_possible and st.session_state.get("ahrefs_est"):
         st.warning(str(_e))
 
 
+# The page deep-dive needs per-page ranking history (Ahrefs / GSC export); the client view leaves it out instead of
+# showing an empty chart. Rankings per market are in the Results tab.
 tabs_main = st.tabs(["🏆 Effect on organic", "💶 Revenue vs. budget", "📈 Results", "🌍 Reach (referral & mentions)",
-                     "🔗 Links & health", "🔬 Page deep-dive"])
+                     "🔗 Links & health"] + ([] if CLIENT_MODE else ["🔬 Page deep-dive"]))
 # ── Effect on organic: linked pages vs. not linked vs. whole domain, authority ──────────
 def _domain_histories(api_key: str, domains: tuple) -> dict:
     from modules.ahrefs_client import get_domain_history
@@ -888,7 +943,7 @@ with col_cards:
     for lang, cost in lang_costs.items():
         cnt   = lang_counts.get(lang, 0)
         avg_c = cost / cnt if cnt > 0 else 0
-        flag  = FLAGS.get(lang, "🌐")
+        flag  = FLAGS.get(lang, "")
         st.markdown(f"""
         <div class="lang-card">
             <div class="lang-name">{flag} {lang}</div>
@@ -899,7 +954,7 @@ with col_cards:
 
 
 # ── Per-language tabs ──────────────────────────────────────────────────────────
-tab_labels = [f"{FLAGS.get(l, '')} {l} ({lang_counts.get(l, 0)})" for l in LANGUAGES]
+tab_labels = [f"{FLAGS.get(l, '')} {l} ({lang_counts.get(l, 0)})".strip() for l in LANGUAGES]
 tabs       = st.tabs(tab_labels)
 
 ahrefs_client = AhrefsClient(ahrefs_key) if (ahrefs_key and not demo_mode) else None
@@ -1010,7 +1065,7 @@ for i, lang in enumerate(LANGUAGES):
                     .tail(8)
                     .reset_index()
                 )
-                cost_per_lp["short"] = cost_per_lp["Link to"].str.split("/").str[-2:].str.join("/")
+                cost_per_lp["short"] = cost_per_lp["Link to"].apply(page_label)
                 fig_lp = go.Figure(go.Bar(
                     x=cost_per_lp["Price"],
                     y=cost_per_lp["short"],
@@ -1040,7 +1095,7 @@ for i, lang in enumerate(LANGUAGES):
                 rev_per_lp = rev_per_lp.sort_values("Revenue", ascending=True).tail(8)
 
                 if not rev_per_lp.empty:
-                    rev_per_lp["short"] = rev_per_lp["Link to"].str.split("/").str[-2:].str.join("/")
+                    rev_per_lp["short"] = rev_per_lp["Link to"].apply(page_label)
                     fig_rev = go.Figure(go.Bar(
                         x=rev_per_lp["Revenue"],
                         y=rev_per_lp["short"],
@@ -1079,12 +1134,12 @@ for i, lang in enumerate(LANGUAGES):
 | **Live (200)** | Number of links returning HTTP 200 — confirmed live and reachable |
 | **Ahrefs Avg. Pos.** | Average organic position across all keywords this page ranks for, right now (source: Ahrefs) |
 | **Ahrefs Traffic** | Estimated monthly organic traffic to this page (source: Ahrefs) |
-| **GSC Position** | Average Google Search position (source: Search Console — connects automatically once configured) |
+| **GSC Position** | Average Google Search position (source: Search Console) |
 | **Revenue (GA4)** | Total revenue attributed to this landing page (source: Google Analytics 4) |
 | **Conversions** | Number of conversions/goal completions on this page (source: GA4) |
-| **ROI** | Revenue divided by link-building cost for this page — above 1.0x means the revenue of the linked page is higher than its link budget (an indication, not proof that the links caused it) |
+| **Revenue vs. cost** | Revenue divided by link-building cost for this page — above 1.0x means the revenue of the linked page is higher than its link budget (an indication, not proof that the links caused it) |
 
-> **Tip:** Low avg. DA + poor GSC position = more high-quality links needed. High DA + strong position + high ROI = campaign is working.
+> **Tip:** Low avg. DA + poor GSC position = more high-quality links needed. High DA + strong position + high revenue vs. cost = campaign is working.
 """)
 
         lp_table = get_landing_page_summary(df)
@@ -1160,8 +1215,8 @@ if broken_links > 0 and "Status code" in all_live.columns:
     st.divider()
     st.markdown(f"""
     <div class="broken-alert">
-        ⚠️ <strong>{broken_links} link(s)</strong> returned a non-200 status code.
-        Check whether they are still live and contact the publisher if needed.
+        ⚠️ <strong>{broken_links} link(s)</strong> {"did not load normally at the last check." if CLIENT_MODE else
+        "returned a non-200 status code. Check whether they are still live and contact the publisher if needed."}
     </div>
     """, unsafe_allow_html=True)
     want_cols = ["Live Link", "Language", "Domain", "Status code", "Price", "Link to"]
@@ -1169,7 +1224,8 @@ if broken_links > 0 and "Status code" in all_live.columns:
     broken_df = all_live[~all_live["Status code"].isin([200])][show_cols]
     st.dataframe(broken_df, width="stretch", hide_index=True)
 
-render_health_section(raw_links, FLAGS, demo_mode)
+if not CLIENT_MODE:      # runs live HTTP checks on a button press: an analyst tool
+    render_health_section(raw_links, FLAGS, demo_mode)
 tabs_main[4].__exit__(None, None, None)
 
 
@@ -1389,9 +1445,10 @@ def render_impact_analysis():
                     )
 
 
-tabs_main[5].__enter__()
-render_impact_analysis()
-tabs_main[5].__exit__(None, None, None)
+if not CLIENT_MODE:
+    tabs_main[5].__enter__()
+    render_impact_analysis()
+    tabs_main[5].__exit__(None, None, None)
 
 
 # ── Footer ─────────────────────────────────────────────────────────────────────

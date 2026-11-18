@@ -72,12 +72,16 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
         if r.get("pos_start") is not None:
             parts.append(f"Avg. position {r['pos_start']:.1f} → {r['pos_now']:.1f}")
         if r.get("top10_start") is not None:
-            parts.append(f"top-10 queries {r['top10_start']} → {r['top10_now']}")
+            parts.append(f"top-10 queries {r['top10_start']:,} → {r['top10_now']:,}")
+        uses_ahrefs = False
         if r.get("top3_start") is not None:
-            parts.append(f"Ahrefs top-3 keywords {r['top3_start']} → {r['top3_now']}")
+            parts.append(f"Ahrefs top-3 keywords {r['top3_start']:,} → {r['top3_now']:,}")
+            uses_ahrefs = True
         if r.get("traffic_change") is not None:
             parts.append(f"Ahrefs traffic estimate {r['traffic_change']:+.0%}")
-        det = "; ".join(parts) + ". Position and top-10 from Search Console, the rest Ahrefs estimates; see the Results tab."
+            uses_ahrefs = True
+        det = "; ".join(parts) + (". Position and top-10 from Search Console, the rest Ahrefs estimates; see the Results tab."
+                                  if uses_ahrefs else ". Measured by Google Search Console; see the Results tab.")
         label = {"improving": "Improving", "stable": "Stable", "mixed": "Mixed signals", "declining": "Mixed to weaker"}[st_]
         cards.append(_card("Are rankings getting better?", label, det,
                            {"improving": GREEN, "stable": GREY, "mixed": GREY, "declining": GREY}[st_]))

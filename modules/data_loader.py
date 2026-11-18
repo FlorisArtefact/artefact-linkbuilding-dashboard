@@ -43,6 +43,31 @@ def load_opportunities(source, lang: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def normalize_url(url, default_host: str = "") -> str:
+    """One spelling per page: 'smartwatchbanden.nl', 'https://smartwatchbanden.nl' and 'https://smartwatchbanden.nl/'
+    are the same homepage. Adds https:// when missing, lowercases the host, drops a trailing slash (root stays '/').
+    A bare path ('/collections/x') gets the market's domain. Empty stays empty."""
+    from urllib.parse import urlparse, urlunparse
+    s = str(url or "").strip()
+    if not s or s.lower() == "nan":
+        return ""
+    if s.startswith("/") and default_host:
+        s = default_host.rstrip("/") + s
+    if "://" not in s:
+        s = "https://" + s
+    p = urlparse(s)
+    path = p.path.rstrip("/") or "/"
+    return urlunparse((p.scheme.lower() or "https", p.netloc.lower(), path, "", p.query, ""))
+
+
+def normalize_link_targets(df: pd.DataFrame, default_host: str = "") -> pd.DataFrame:
+    if df is None or df.empty or "Link to" not in df.columns:
+        return df
+    df = df.copy()
+    df["Link to"] = df["Link to"].apply(lambda u: normalize_url(u, default_host))
+    return df
+
+
 def apply_filters(df: pd.DataFrame, year=None, quarter=None, campaign=None) -> pd.DataFrame:
     if df.empty:
         return df

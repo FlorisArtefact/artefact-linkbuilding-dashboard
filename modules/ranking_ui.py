@@ -83,15 +83,23 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
 
     # Search Console first: it supplies the position and top-10 signals (free, measured by Google)
     gsc_by_lang = {}
+    _pre = {}
+    if not demo_mode and gsc_creds:      # all markets and both windows at once
+        from modules.parallel import run_parallel
+        _keys = [(l, w) for l in langs if (gsc_sites or {}).get(l) for w in ("start", "now")]
+        _res = run_parallel([(get_gsc_linked_summary, (gsc_creds, gsc_sites[l], tuple(sorted(per_lang[l]["urls"])), *win[w]), {})
+                             for l, w in _keys])
+        _pre = dict(zip(_keys, _res))
     for l in langs:
         site = (gsc_sites or {}).get(l, "")
         g0 = g1 = None
         if demo_mode:
             g0, g1 = demo_data.demo_gsc_summary(l, 0), demo_data.demo_gsc_summary(l, 1)
         elif site and gsc_creds:
-            urls = tuple(sorted(per_lang[l]["urls"]))
-            g0 = get_gsc_linked_summary(gsc_creds, site, urls, *win["start"])
-            g1 = get_gsc_linked_summary(gsc_creds, site, urls, *win["now"])
+            g0 = _pre.get((l, "start"))
+            g1 = _pre.get((l, "now"))
+            g0 = g0 if isinstance(g0, dict) else None
+            g1 = g1 if isinstance(g1, dict) else None
         ok = bool(g0 and g1 and g0.get("position") is not None and g1.get("position") is not None)
         gsc_by_lang[l] = {"site": bool(site and gsc_creds) or demo_mode, "g0": g0, "g1": g1, "ok": ok}
 
@@ -108,6 +116,8 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
                 "top10_now": sum(x["g1"]["top10"] for x in items)}
 
     # ── per market headline: Ahrefs (modelled) next to Search Console (measured by Google) ──
+    from modules.ahrefs_ui import client_view as _cvh
+    hide_ahrefs = ahrefs_missing and _cvh()     # client view without Ahrefs data: show Search Console only, no empty column
     cols = st.columns(len(langs))
     for i, l in enumerate(langs):
         agg = aggregate(history_by_lang[l])
@@ -116,17 +126,21 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
         result[l] = s
         icon, label = STATUS_TXT[s["status"]]
         with cols[i]:
-            st.markdown(f"**{flags.get(l, '🌐')} {l}** &nbsp; {icon} {label}")
-            ca, cg = st.columns(2)
-            with ca:
-                st.caption("**Ahrefs** · modelled")
-                if ahrefs_missing:
+            st.markdown(f"**{(flags.get(l, '') + ' ' + l).strip()}** &nbsp; {icon} {label}")
+            ca, cg = (None, st.container()) if hide_ahrefs else st.columns(2)
+            with (ca if ca is not None else st.empty()):
+                if ca is None:
+                    pass
+                elif ahrefs_missing:
+                    st.caption("**Ahrefs** · modelled")
                     from modules.ahrefs_ui import client_view as _cv2
                     st.caption("Not part of this report yet." if _cv2() else
                                ("Not loaded (see the button above)." if api_key else "No Ahrefs key."))
                 elif agg.empty or s["traffic_start"] is None:
+                    st.caption("**Ahrefs** · modelled")
                     st.caption("Not enough Ahrefs data.")
                 else:
+                    st.caption("**Ahrefs** · modelled")
                     first, last = agg.iloc[0], agg.iloc[-1]
                     st.metric("Keywords ranked", f"{int(last['keywords']):,}", delta=int(last["keywords"] - first["keywords"]),
                               help="Keywords these pages rank for in Google's top 100, per Ahrefs.")
@@ -146,7 +160,7 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
                     st.metric("Avg. position", f"{g1['position']:.1f}", delta=f"{g0['position'] - g1['position']:+.1f} places",
                               help="Impression-weighted average position of these pages over all queries, last complete month "
                                    "versus the first month of the look-back.")
-                    st.metric("Queries in top 10", g1["top10"], delta=g1["top10"] - g0["top10"],
+                    st.metric("Queries in top 10", f"{g1['top10']:,}", delta=f"{g1['top10'] - g0['top10']:+,}",
                               help="Page + search query pairs on positions 1-10. Google hides rare queries, so this is "
                                    "lower than a keyword tool shows.")
                     st.metric("Impressions", f"{g1['impressions']:,.0f}",
@@ -158,23 +172,24 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
     all_hist = {f"{l}|{u}": df for l in langs for u, df in history_by_lang[l].items()}
     result["_total"] = trend_status(aggregate(all_hist), _gsc_pair(list(gsc_by_lang.values())))
 
-    # ── all URLs together ──
-    with st.expander("📋 All pages we build links to: Ahrefs, first vs. latest snapshot"):
-        frames = []
-        for l in langs:
-            t = per_url_table(history_by_lang[l])
-            if not t.empty:
-                t.insert(0, "Market", l)
-                frames.append(t)
-        if frames:
-            st.dataframe(pd.concat(frames, ignore_index=True), width="stretch", hide_index=True, column_config={
-                "Landing Page": st.column_config.LinkColumn("Landing Page", max_chars=50),
-                "Traffic start": st.column_config.NumberColumn(format="%d"),
-                "Traffic now": st.column_config.NumberColumn(format="%d"),
-                "Change": st.column_config.NumberColumn("Traffic change (est.)", format="%+d"),
-            })
-        else:
-            st.caption("Not part of this report yet.")
+    # ── all URLs together ── (left out of the client view when there is no Ahrefs data)
+    if not hide_ahrefs:
+      with st.expander("📋 All pages we build links to: Ahrefs, first vs. latest snapshot"):
+          frames = []
+          for l in langs:
+              t = per_url_table(history_by_lang[l])
+              if not t.empty:
+                  t.insert(0, "Market", l)
+                  frames.append(t)
+          if frames:
+              st.dataframe(pd.concat(frames, ignore_index=True), width="stretch", hide_index=True, column_config={
+                  "Landing Page": st.column_config.LinkColumn("Landing Page", max_chars=50),
+                  "Traffic start": st.column_config.NumberColumn(format="%d"),
+                  "Traffic now": st.column_config.NumberColumn(format="%d"),
+                  "Change": st.column_config.NumberColumn("Traffic change (est.)", format="%+d"),
+              })
+          else:
+              st.caption("Not part of this report yet.")
 
     st.caption("⚠️ A direction, not proof. Rankings also move because of content, technique and competition. Ahrefs figures are "
                "model estimates; Search Console figures are measured by Google but hide rare queries."

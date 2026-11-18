@@ -49,7 +49,9 @@ def render_citations_section(raw_links: dict, flags: dict, demo_mode: bool) -> N
         st.plotly_chart(fig, width="stretch")
 
     if total_m == 0:
-        st.info("No brand mentions registered yet. To show them here, set **Brand Mention** in the column "
+        from modules.ahrefs_ui import client_view
+        st.info("No brand mentions placed yet." if client_view() else
+                "No brand mentions registered yet. To show them here, set **Brand Mention** in the column "
                 "'Backlink/ Brand Mention' of the Live_links tab when a placement names the brand without a link.")
     else:
         with st.expander(f"📋 All brand mentions ({total_m})"):
