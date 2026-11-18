@@ -166,7 +166,7 @@ def budget_advice(investment: float, scenarios: dict, mode, a: dict) -> dict:
     if mode is None or not investment or investment < a["min_investment"]:
         return {"verdict": "NOT ENOUGH DATA", "key": "unknown", "color": "#8B9BB4",
                 "reason": "There is not enough measurable spend or organic value in the selected period "
-                          "to give a responsible budget signal. Connect GA4 / Search Console or widen the period."}
+                          "to give a responsible budget signal. Revenue or traffic data is not connected yet, or the period is too short."}
     low, base = scenarios["low"]["roi"], scenarios["base"]["roi"]
     if base >= t["increase_base_roi"] and low >= t["increase_low_roi"]:
         return {"verdict": "SIGNAL: ROOM TO INCREASE", "key": "increase", "color": "#1E9E5A",

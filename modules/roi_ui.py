@@ -125,7 +125,7 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
         f'<div class="roi-tiles">{tiles}</div></div>', unsafe_allow_html=True)
 
     if total["mode"] is None:
-        st.info("💡 Connect **GA4** (revenue) or **Search Console** (organic clicks) to unlock the ROI scenarios. "
+        st.info("💡 Connect **GA4** (revenue) or **Search Console** (organic clicks) to show revenue against budget. "
                 "Until then the investment is shown but no value can be estimated.")
     else:
         mode_txt = ("measured **GA4 organic revenue** on the linked landing pages"
@@ -160,8 +160,8 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
                 x=[f"{s:.0%}" for s in shares], y=[f"{m:.0%}" for m in mults], z=z, zmin=0, zmax=4,
                 colorscale=[[0, "#F8D7DA"], [0.25, "#FFE9B0"], [0.5, "#D9F0D3"], [1, "#2E9E5B"]],
                 texttemplate="%{z:.1f}x", showscale=False, hoverongaps=False,
-                hovertemplate="Attribution %{x}<br>Value base %{y}<br>ROI %{z:.2f}x<extra></extra>"))
-            hm.update_layout(title=dict(text="Sensitivity: ROI vs. attribution & value base (break-even = 1.0x)",
+                hovertemplate="Attribution %{x}<br>Value base %{y}<br>Revenue vs. budget %{z:.2f}x<extra></extra>"))
+            hm.update_layout(title=dict(text="Sensitivity: revenue vs. budget by attribution & value base (break-even = 1.0x)",
                                         font=dict(size=13, color=NAVY)),
                              height=340, paper_bgcolor=WHITE, font=dict(family="Roboto", color=NAVY, size=11),
                              margin=dict(t=45, b=40, l=60, r=20),
@@ -169,23 +169,26 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
             st.plotly_chart(hm, width="stretch")
 
     # Per-language table
+    # Values pre-formatted as text so the live dashboard and the static snapshot show the same thing.
+    def _x(v):
+        try:
+            return "—" if v is None or pd.isna(v) else f"{float(v):.1f}x"
+        except (TypeError, ValueError):
+            return "—"
     table = []
     for lang, inv, m, res in rows:
         sc = res["scenarios"]
         table.append({
-            "Market": f"{flags.get(lang, '🌐')} {lang}", "Investment": inv,
+            "Market": f"{flags.get(lang, '🌐')} {lang}", "Budget": _money(a, inv or 0),
             "Basis": {"revenue": "GA4 revenue", "traffic": "Traffic estimate", None: "—"}[res["mode"]],
-            "ROI low": sc["low"]["roi"], "ROI realistic": sc["base"]["roi"], "ROI high": sc["high"]["roi"],
-            "Advice": res["advice"]["verdict"].title(),
+            "Revenue vs. budget (cautious)": _x(sc["low"]["roi"]),
+            "Revenue vs. budget (realistic)": _x(sc["base"]["roi"]),
+            "Revenue vs. budget (optimistic)": _x(sc["high"]["roi"]),
+            "Signal": res["advice"]["verdict"].capitalize(),
         })
     if table:
         st.markdown("**Per market**")
-        st.dataframe(pd.DataFrame(table), width="stretch", hide_index=True, column_config={
-            "Investment": st.column_config.NumberColumn(format="€%,.0f"),
-            "ROI low": st.column_config.NumberColumn(format="%.1fx"),
-            "ROI realistic": st.column_config.NumberColumn(format="%.1fx"),
-            "ROI high": st.column_config.NumberColumn(format="%.1fx"),
-        })
+        st.dataframe(pd.DataFrame(table), width="stretch", hide_index=True)
 
     # Data notes + assumptions
     notes = []
@@ -195,17 +198,24 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
                  f"{'connected' if gsc_connected else 'not connected'}.")
     notes.append(f"Value basis: {total['mode'] or 'none available'}. Revenue/traffic window: {window_txt} ({tot_days} days), "
                  f"extrapolated to {int(a['horizon_months'])} months.")
-    notes.append("Attribution shares (" + " / ".join(f"{a['attribution_share'][s]:.0%}" for s in SCENARIOS) +
-                 ") are PLACEHOLDERS — not yet validated with BWJ, colleagues or pillar leads.")
+    from modules.ahrefs_ui import client_view
+    _client = client_view()
+    if _client:
+        notes.append("Share of page revenue counted for link building per scenario (cautious / realistic / optimistic): "
+                     + " / ".join(f"{a['attribution_share'][s]:.0%}" for s in SCENARIOS) + ". These are working assumptions.")
+    else:
+        notes.append("Attribution shares (" + " / ".join(f"{a['attribution_share'][s]:.0%}" for s in SCENARIOS) +
+                     ") are PLACEHOLDERS — not yet validated with BWJ, colleagues or pillar leads.")
     notes.append("Revenue is organic-search only and matched to linked landing pages by URL path; "
                  "cross-page halo effects and brand-search lift are not counted (conservative).")
 
     with st.expander("📐 Assumptions & data quality"):
         for n in notes:
             st.markdown(f"- {n}")
-        st.markdown(f"- Advice rule: increase if realistic ROI ≥ {a['thresholds']['increase_base_roi']}x **and** low ROI ≥ "
-                    f"{a['thresholds']['increase_low_roi']}x; decrease if realistic ROI < {a['thresholds']['decrease_base_roi']}x; "
-                    f"otherwise maintain. Thresholds are configurable in `config.json → roi.thresholds`.")
+        if not _client:
+            st.markdown(f"- Advice rule: increase if realistic ROI ≥ {a['thresholds']['increase_base_roi']}x **and** low ROI ≥ "
+                        f"{a['thresholds']['increase_low_roi']}x; decrease if realistic ROI < {a['thresholds']['decrease_base_roi']}x; "
+                        f"otherwise maintain. Thresholds are configurable in `config.json → roi.thresholds`.")
 
     with st.expander("🧭 How to read this — steering, not proof"):
         st.markdown(
@@ -215,11 +225,11 @@ def render_roi_section(client: str, period_label: str, per_lang: dict, a: dict,
             "- **Pages can fall for reasons unrelated to links:** competition, technical issues (indexability, "
             "PageSpeed), weak content, internal cannibalisation, too few internal links.\n"
             "- **Links also lift the whole domain.** An expensive link to a deep page may not pay back on that page, "
-            "yet strengthens the domain — page-level ROI therefore *understates* the total effect. Look at the "
+            "yet strengthens the domain — the page-level figure therefore *understates* the total effect. Look at the "
             "domain trend below as well.\n"
-            "- **Budget does not need to return 100 %.** Treat ROI as a compass: is the direction good, and where "
+            "- **Budget does not need to return 100 %.** Treat revenue vs. budget as a compass: is the direction good, and where "
             "does the money work best?\n"
-            "- **“Credited to links” (10 / 20 / 35 %)** is the share of organic revenue on the linked pages that we "
+            "- **“Credited to links” (" + " / ".join(f"{a['attribution_share'][s]:.0%}" for s in SCENARIOS) + ")** is the share of organic revenue on the linked pages that we "
             "assume is due to link building. It is an assumption to agree with the client and pillar leads."
         )
 

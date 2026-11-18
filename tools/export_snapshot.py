@@ -48,7 +48,10 @@ class Renderer:
     def dataframe(self, el) -> str:
         df = el.value
         try:
-            df = df.head(300)
+            df = df.head(300).copy()
+            for c in df.columns:                      # None in text columns would print as "None"
+                if df[c].dtype == object:
+                    df[c] = df[c].where(df[c].notna(), "")
             return '<div class="tbl">' + df.to_html(index=False, border=0, na_rep="", float_format=lambda v: f"{v:,.2f}".rstrip("0").rstrip("."),
                                                    classes="df", escape=True) + "</div>"
         except Exception:
@@ -151,7 +154,7 @@ window.addEventListener('load',renderPlots);
 """
 
 
-def export(config: str, out: Path, title: str | None = None) -> dict:
+def export(config: str, out: Path, title: str | None = None, single_file: Path | None = None) -> dict:
     os.environ["CONFIG_FILE"] = config
     os.environ["VIEW_MODE"] = "client"
     os.environ["AHREFS_ENABLED"] = "0"          # a snapshot never spends credits
@@ -198,8 +201,17 @@ def export(config: str, out: Path, title: str | None = None) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_text(page, encoding="utf-8")
     import plotly
-    shutil.copy(Path(plotly.__file__).parent / "package_data" / "plotly.min.js", out / "plotly.min.js")
-    return {"client": client, "markets": markets, "bytes": len(page), "plots": r.n, "skipped": r.skipped, "out": str(out)}
+    plotly_js = Path(plotly.__file__).parent / "package_data" / "plotly.min.js"
+    shutil.copy(plotly_js, out / "plotly.min.js")
+    res = {"client": client, "markets": markets, "bytes": len(page), "plots": r.n, "skipped": r.skipped, "out": str(out)}
+    if single_file:
+        # One self-contained file (plotly inlined): can be shared via Google Drive per e-mail address and opened offline.
+        lib = plotly_js.read_text(encoding="utf-8").replace("</script", "<\\/script")
+        one = page.replace('<script src="plotly.min.js"></script>', f"<script>{lib}</script>")
+        single_file.parent.mkdir(parents=True, exist_ok=True)
+        single_file.write_text(one, encoding="utf-8")
+        res["single_file"] = str(single_file)
+    return res
 
 
 if __name__ == "__main__":
@@ -207,6 +219,7 @@ if __name__ == "__main__":
     ap.add_argument("--config", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--title")
+    ap.add_argument("--single-file", help="also write one self-contained HTML file (plotly inlined) to this path")
     a = ap.parse_args()
-    res = export(a.config, Path(a.out), a.title)
+    res = export(a.config, Path(a.out), a.title, Path(a.single_file) if a.single_file else None)
     print(json.dumps(res, ensure_ascii=True))

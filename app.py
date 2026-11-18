@@ -778,7 +778,7 @@ evidence_headline = render_evidence_section(
 tabs_main[0].__exit__(None, None, None)
 
 tabs_main[1].__enter__()
-if _est_possible and not st.session_state.get("ahrefs_est"):
+if _est_possible and not st.session_state.get("ahrefs_est") and not CLIENT_MODE:
     st.info("💡 No revenue data yet (waiting for GA4). You can get an **indicative** return based on the Ahrefs traffic "
             "estimate of the linked pages. It takes about a minute the first time and uses Ahrefs API units.")
     st.button("▶ Estimate return from Ahrefs traffic", key="ahrefs_est_btn",
@@ -1048,7 +1048,7 @@ for i, lang in enumerate(LANGUAGES):
                 else:
                     st.info("No GA4 revenue data matched to these landing pages yet.")
             else:
-                st.info(
+                st.info("Revenue per landing page is not connected yet." if CLIENT_MODE else
                     "💡 Connect **Google Analytics 4** to see revenue per landing page here — "
                     "fully automatic once configured, no manual work. See sidebar for setup steps."
                 )
@@ -1126,7 +1126,9 @@ for i, lang in enumerate(LANGUAGES):
         if "Conversions" in lp_table.columns:
             col_cfg["Conversions"] = st.column_config.NumberColumn("Conversions", format="%.0f")
         if "ROI" in lp_table.columns:
-            col_cfg["ROI"] = st.column_config.NumberColumn("ROI", format="%.1fx")
+            lp_table = lp_table.rename(columns={"ROI": "Revenue vs. cost"})
+            lp_table["Revenue vs. cost"] = lp_table["Revenue vs. cost"].map(
+                lambda v: "" if pd.isna(v) else f"{float(v):.1f}x")
 
         st.dataframe(lp_table, width="stretch", hide_index=True, column_config=col_cfg)
 
@@ -1201,7 +1203,8 @@ def render_impact_analysis():
                 all_lp_options.append({"url": url, "lang": lang})
 
     if not all_lp_options:
-        st.info("No landing pages available for analysis. Upload the Excel database.")
+        st.info("No landing pages available for analysis yet." if CLIENT_MODE else
+                "No landing pages available for analysis. Upload the Excel database.")
     else:
         ia_col1, ia_col2, ia_col3 = st.columns([1, 3, 1])
         with ia_col1:
@@ -1256,7 +1259,7 @@ def render_impact_analysis():
             )
 
             if not has_data:
-                st.warning(
+                st.warning("No position history for this page yet." if CLIENT_MODE else
                     "No historical position data available. "
                     "Upload a GSC export with the date dimension enabled, or check the Ahrefs API connection."
                 )
@@ -1368,7 +1371,7 @@ def render_impact_analysis():
                                   help="Average Domain Authority of the domains that placed links. "
                                        "Higher DA = more authority transferred to the landing page.")
 
-                if gsc_history.empty:
+                if gsc_history.empty and not CLIENT_MODE:
                     st.caption(
                         "💡 **Tip:** Upload a GSC export with the date dimension enabled for daily position data. "
                         "In Search Console: Performance → enable 'Date' → Export CSV."
