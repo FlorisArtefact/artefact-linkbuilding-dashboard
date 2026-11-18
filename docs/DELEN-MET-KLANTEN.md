@@ -14,6 +14,13 @@ python tools/export_snapshot.py --config config.example.json --out site/demo    
 - Snapshot = vaste momentopname. Alleen de marktkeuze en de tabbladen werken; Jaar/Kwartaal/Maand staan vast op de standaard.
 - Eén keer per maand opnieuw exporteren en opnieuw uploaden.
 
+## 1b. Eén bestand delen via Google Drive (geen extra account)
+```
+python tools/export_snapshot.py --config config.json --out site/bwj --single-file "../BWJ/03 Deliverables/BWJ-linkbuilding-dashboard-<datum>.html"
+```
+- Plotly zit in het bestand (ca. 5 MB). Het opent offline met een dubbelklik.
+- Deel het via Drive met het e-mailadres van de klant. Drive bepaalt wie erbij kan. De klant downloadt het bestand en opent het in de browser, want Drive toont HTML zelf niet als pagina.
+
 ## 2. Waarom een Cloudflare-account? (en wie heeft wat nodig)
 - **Jij (eigenaar) hebt één account nodig** om de site te plaatsen en de toegangsregel in te stellen. Dat kan met elk e-mailadres, ook een Gmail-adres, het is alleen het inlogadres voor het beheer.
 - **Klanten (kijkers) hebben geen account nodig.** Ze vullen hun e-mailadres in en krijgen een code per mail (one-time PIN). Alleen adressen op jouw lijst krijgen die code.

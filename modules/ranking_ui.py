@@ -174,7 +174,7 @@ def render_ranking_section(per_lang: dict, api_key: str, demo_mode: bool, flags:
                 "Change": st.column_config.NumberColumn("Traffic change (est.)", format="%+d"),
             })
         else:
-            st.caption("Not loaded.")
+            st.caption("Not part of this report yet.")
 
     st.caption("⚠️ A direction, not proof. Rankings also move because of content, technique and competition. Ahrefs figures are "
                "model estimates; Search Console figures are measured by Google but hide rare queries."
