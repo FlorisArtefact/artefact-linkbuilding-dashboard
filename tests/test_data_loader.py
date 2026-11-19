@@ -27,3 +27,9 @@ def test_summary_groups_homepage_once():
     assert len(out) == 2
     home = out[out["Landing Page"] == "https://smartwatchbanden.nl/"].iloc[0]
     assert home["# Links"] == 2 and home["Total Cost (€)"] == 300
+
+
+def test_blank_sheet_cells_are_not_approved():
+    from modules.data_loader import is_approved
+    col = pd.Series(["Ja", "", None, "  ", "nee", "Yes", float("nan"), "x"])
+    assert is_approved(col).tolist() == [True, False, False, False, False, True, False, True]

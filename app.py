@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from modules.data_loader import (
     load_live_links,
     normalize_link_targets,
+    is_approved,
     load_opportunities,
     apply_filters,
     get_landing_page_summary,
@@ -21,6 +22,7 @@ from modules.gsc_client import (
     merge_gsc_into_table,
     get_gsc_data_api,
     get_gsc_monthly,
+    get_gsc_queries,
     gsc_api_available,
 )
 from modules.ga4_client import (
@@ -46,6 +48,12 @@ from modules.sheets_loader import (
 )
 from modules import demo_data
 from modules.roi_ui import sidebar_assumptions, render_roi_section
+from modules.roi_model import compute_roi
+from modules import budget_advice as _ba
+from modules import evidence_model as _ev_model
+from modules.growth_model import monthly_pivot as _monthly_pivot
+from modules.budget_ui import render_budget_advice
+from modules.search_ui import render_search_section
 
 load_dotenv()
 
@@ -326,7 +334,7 @@ with st.sidebar:
     _sb_filters.__enter__()
     # — Filters
     current_year = datetime.now().year
-    year_opts = list(range(current_year - 1, current_year + 2))
+    year_opts = list(range(current_year - 1, current_year + 1))   # no future year: it would only show empty pages
     selected_year = st.selectbox("Year", year_opts, index=year_opts.index(current_year))
     selected_quarter = st.selectbox("Quarter", ["All", "Q1", "Q2", "Q3", "Q4"])
     _months = ["All", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -728,7 +736,7 @@ _pipe = pd.concat([d for d in opp_data.values() if d is not None and not d.empty
 c1, c2, c3, c4 = st.columns(4)
 if total_links == 0 and not _pipe.empty:
     # Nothing placed yet (new client / new site): show the plan instead of four empty tiles, clearly labelled.
-    _appr = int(_pipe["Approved?"].notna().sum()) if "Approved?" in _pipe.columns else 0
+    _appr = int(is_approved(_pipe["Approved?"]).sum()) if "Approved?" in _pipe.columns else 0
     _price = pd.to_numeric(_pipe["Price"], errors="coerce") if "Price" in _pipe.columns else pd.Series(dtype=float)
     _dr = pd.to_numeric(_pipe["DR"], errors="coerce") if "DR" in _pipe.columns else pd.Series(dtype=float)
     c1.metric("Domains in pipeline", len(_pipe), help="Domains proposed for link building. Nothing is placed yet.")
@@ -748,7 +756,7 @@ else:
         help="Sum of all costs for placed backlinks in the filtered period."
     )
     c3.metric(
-        "Avg. Domain Authority", f"{avg_da:.0f}" if pd.notna(avg_da) and avg_da > 0 else "—",
+        "Avg. DA", f"{avg_da:.0f}" if pd.notna(avg_da) and avg_da > 0 else "—",
         help="Domain Authority (DA) is a Moz score (0–100) measuring a domain's authority. "
              "A higher DA means more authority and therefore more SEO value for the backlink. "
              "This is the average DA of all domains linking to your pages."
@@ -813,63 +821,90 @@ if _est_possible and st.session_state.get("ahrefs_est"):
 
 # The page deep-dive needs per-page ranking history (Ahrefs / GSC export); the client view leaves it out instead of
 # showing an empty chart. Rankings per market are in the Results tab.
-tabs_main = st.tabs(["🏆 Effect on organic", "💶 Revenue vs. budget", "📈 Results", "🌍 Reach (referral & mentions)",
-                     "🔗 Links & health"] + ([] if CLIENT_MODE else ["🔬 Page deep-dive"]))
+HAS_REVENUE = bool(demo_mode or _ga4_ok)   # without GA4 (e.g. Hornbach) the revenue tabs give way to Search Console
+_tab_keys = (["advice"] + (["effect", "roi"] if HAS_REVENUE else ["search"]) + ["results"]
+             + (["reach"] if HAS_REVENUE else []) + ["links"] + ([] if CLIENT_MODE else ["deep"]))
+_tab_names = {"advice": "🧭 Budget advice", "effect": "🏆 Effect on organic", "roi": "💶 Revenue vs. budget",
+              "search": "🔎 Search performance", "results": "📈 Results", "reach": "🌍 Reach (referral & mentions)",
+              "links": "🔗 Links & health", "deep": "🔬 Page deep-dive"}
+TAB = dict(zip(_tab_keys, st.tabs([_tab_names[k] for k in _tab_keys])))
 # ── Effect on organic: linked pages vs. not linked vs. whole domain, authority ──────────
 def _domain_histories(api_key: str, domains: tuple) -> dict:
     from modules.ahrefs_client import get_domain_history
     return {d: get_domain_history(api_key, d) for d in domains}
 
 
-tabs_main[0].__enter__()
-if demo_mode:
-    _hist = {l: demo_data.demo_domain_history(l, raw_links.get(l)) for l in LANGUAGES}
-    _gscm = {l: demo_data.demo_gsc_monthly(l) for l in LANGUAGES}
+_search_head = None
+if HAS_REVENUE:
+    TAB["effect"].__enter__()
+    if demo_mode:
+        _hist = {l: demo_data.demo_domain_history(l, raw_links.get(l)) for l in LANGUAGES}
+        _gscm = {l: demo_data.demo_gsc_monthly(l) for l in LANGUAGES}
+    else:
+        _doms = {l: config.get("domains", {}).get(l, "") for l in LANGUAGES}
+        _hh = {}
+        if ahrefs_key:
+            from modules.ahrefs_client import pending_domain_history
+            from modules.ahrefs_ui import gated as _gated
+            _dom_list = tuple(d for d in _doms.values() if d)
+            _hh = _gated("ev_load", "Domain authority and traffic history (Ahrefs)", pending_domain_history(_dom_list),
+                         lambda: _domain_histories(ahrefs_key, _dom_list)) or {}
+        _hist = {l: _hh.get(_doms[l]) for l in LANGUAGES}
+        _gscm = {l: get_gsc_monthly(_creds_file, config.get("gsc_properties", {}).get(l, "")) for l in LANGUAGES} if use_gsc_api else {}
+
+    evidence_headline = render_evidence_section(
+        per_lang={l: {"monthly": monthly_data.get(l), "links": raw_links.get(l, pd.DataFrame())} for l in LANGUAGES},
+        langs=LANGUAGES, domains=config.get("domains", {}), history=_hist, gsc_monthly=_gscm, currency="€",
+        categories=config.get("categories"), content_keywords=config.get("content_keywords"), demo_mode=demo_mode, flags=FLAGS)
+    TAB["effect"].__exit__(None, None, None)
+
+    TAB["roi"].__enter__()
+    if _est_possible and not st.session_state.get("ahrefs_est") and not CLIENT_MODE:
+        st.info("💡 No revenue data yet (waiting for GA4). You can get an **indicative** return based on the Ahrefs traffic "
+                "estimate of the linked pages. It takes about a minute the first time and uses Ahrefs API units.")
+        st.button("▶ Estimate return from Ahrefs traffic", key="ahrefs_est_btn",
+                  on_click=lambda: st.session_state.update(ahrefs_est=True))
+    roi_total = render_roi_section(
+        client=CLIENT,
+        period_label=f"{selected_year} · {quarter_label}",
+        per_lang={
+            lang: {"links": live_data.get(lang, pd.DataFrame()), "ga4": ga4_data.get(lang), "gsc": gsc_df,
+                   "ahrefs_monthly": _ahrefs_monthly.get(lang, 0)}
+            for lang in LANGUAGES
+        },
+        a=roi_assumptions,
+        ga4_connected=bool(use_ga4),
+        gsc_connected=bool(demo_mode or not gsc_df.empty),
+        demo_mode=demo_mode,
+        flags=FLAGS,
+        window_days=PERIOD_DAYS if (use_ga4 and not demo_mode) else 90,
+        window_txt=PERIOD_TXT if (use_ga4 and not demo_mode) else "last 90 days",
+    )
+
+    TAB["roi"].__exit__(None, None, None)
 else:
-    _doms = {l: config.get("domains", {}).get(l, "") for l in LANGUAGES}
-    _hh = {}
-    if ahrefs_key:
-        from modules.ahrefs_client import pending_domain_history
-        from modules.ahrefs_ui import gated as _gated
-        _dom_list = tuple(d for d in _doms.values() if d)
-        _hh = _gated("ev_load", "Domain authority and traffic history (Ahrefs)", pending_domain_history(_dom_list),
-                     lambda: _domain_histories(ahrefs_key, _dom_list)) or {}
-    _hist = {l: _hh.get(_doms[l]) for l in LANGUAGES}
-    _gscm = {l: get_gsc_monthly(_creds_file, config.get("gsc_properties", {}).get(l, "")) for l in LANGUAGES} if use_gsc_api else {}
-
-evidence_headline = render_evidence_section(
-    per_lang={l: {"monthly": monthly_data.get(l), "links": raw_links.get(l, pd.DataFrame())} for l in LANGUAGES},
-    langs=LANGUAGES, domains=config.get("domains", {}), history=_hist, gsc_monthly=_gscm, currency="€",
-    categories=config.get("categories"), content_keywords=config.get("content_keywords"), demo_mode=demo_mode, flags=FLAGS)
-tabs_main[0].__exit__(None, None, None)
-
-tabs_main[1].__enter__()
-if _est_possible and not st.session_state.get("ahrefs_est") and not CLIENT_MODE:
-    st.info("💡 No revenue data yet (waiting for GA4). You can get an **indicative** return based on the Ahrefs traffic "
-            "estimate of the linked pages. It takes about a minute the first time and uses Ahrefs API units.")
-    st.button("▶ Estimate return from Ahrefs traffic", key="ahrefs_est_btn",
-              on_click=lambda: st.session_state.update(ahrefs_est=True))
-roi_total = render_roi_section(
-    client=CLIENT,
-    period_label=f"{selected_year} · {quarter_label}",
-    per_lang={
-        lang: {"links": live_data.get(lang, pd.DataFrame()), "ga4": ga4_data.get(lang), "gsc": gsc_df,
-               "ahrefs_monthly": _ahrefs_monthly.get(lang, 0)}
-        for lang in LANGUAGES
-    },
-    a=roi_assumptions,
-    ga4_connected=bool(use_ga4),
-    gsc_connected=bool(demo_mode or not gsc_df.empty),
-    demo_mode=demo_mode,
-    flags=FLAGS,
-    window_days=PERIOD_DAYS if (use_ga4 and not demo_mode) else 90,
-    window_txt=PERIOD_TXT if (use_ga4 and not demo_mode) else "last 90 days",
-)
-
-tabs_main[1].__exit__(None, None, None)
+    evidence_headline = None
+    roi_total = compute_roi(float(total_cost or 0), 0.0, 0.0, 90, roi_assumptions)
+    _search_head = None
+    with TAB["search"]:
+        _sites_by_lang = {l: config.get("gsc_properties", {}).get(l, "") for l in LANGUAGES}
+        _host = lambda l: config.get("domains", {}).get(l, "").lower().removeprefix("www.")
+        render_search_section(
+            per_lang={l: {"monthly": get_gsc_monthly(_creds_file, x) if (use_gsc_api and x) else pd.DataFrame(),
+                          "pages": gsc_df[gsc_df["Page"].astype(str).str.contains(_host(l), regex=False)] if (not gsc_df.empty and _host(l)) else gsc_df,
+                          "queries": get_gsc_queries(_creds_file, x) if (use_gsc_api and x) else pd.DataFrame()}
+                      for l, x in _sites_by_lang.items()},
+            market_names={l: l for l in LANGUAGES},
+            brand_terms=config.get("brand_terms") or [CLIENT.split(" ")[0]],
+            groups=config.get("page_groups"))
+        _m0 = get_gsc_monthly(_creds_file, _sites_by_lang.get(LANGUAGES[0], "")) if use_gsc_api else pd.DataFrame()
+        if len(_m0) >= 4:
+            _m0 = _m0.sort_values("month")
+            _search_head = {"month": _m0.iloc[-1]["month"], "clicks": float(_m0.iloc[-1]["Clicks"]),
+                            "clicks_before": float(_m0.iloc[-4]["Clicks"]), "month_before": _m0.iloc[-4]["month"]}
 
 # ── Revenue growth on linked pages (per URL / category / domain) ────────────────
-tabs_main[2].__enter__()
+TAB["results"].__enter__()
 growth_headline = render_growth_section(
     per_lang={lang: {"monthly": monthly_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
     categories=config.get("categories"),
@@ -892,23 +927,69 @@ ranking_result = render_ranking_section(
     gsc_sites=config.get("gsc_properties", {}),
 )
 
-tabs_main[2].__exit__(None, None, None)
+TAB["results"].__exit__(None, None, None)
 
 # ── Referral visitors + brand mentions (side effects of the campaign) ───────────
-tabs_main[3].__enter__()
-render_referral_section(
-    per_lang={lang: {"referral": referral_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
-    flags=FLAGS, demo_mode=demo_mode, period_txt=PERIOD_TXT if not demo_mode else "demo data",
-)
-render_citations_section(raw_links, FLAGS, demo_mode)
-tabs_main[3].__exit__(None, None, None)
+if HAS_REVENUE:
+    TAB["reach"].__enter__()
+    render_referral_section(
+        per_lang={lang: {"referral": referral_data.get(lang), "links": raw_links.get(lang, pd.DataFrame())} for lang in LANGUAGES},
+        flags=FLAGS, demo_mode=demo_mode, period_txt=PERIOD_TXT if not demo_mode else "demo data",
+    )
+    render_citations_section(raw_links, FLAGS, demo_mode)
+    TAB["reach"].__exit__(None, None, None)
+
+# ── Budget advice (first tab): what to do with the budget, from the signals above ──────────────
+with TAB["advice"]:
+    _window = PERIOD_DAYS if (use_ga4 and not demo_mode) else 90
+    _pages = []
+    for _l in LANGUAGES:
+        _lk = raw_links.get(_l, pd.DataFrame())
+        _st = pd.DataFrame()
+        _mon = monthly_data.get(_l)
+        if _mon is not None and not _mon.empty and not _lk.empty:
+            try:
+                _st = _ev_model.page_table(_monthly_pivot(_mon, value="Revenue"), _lk)
+            except Exception:
+                _st = pd.DataFrame()
+        _h = config.get("domains", {}).get(_l, "").lower().removeprefix("www.")
+        _g = gsc_df[gsc_df["Page"].astype(str).str.contains(_h, regex=False)] if (not gsc_df.empty and _h) else gsc_df
+        _pt = _ba.page_table(_lk, _g, _st)
+        if not _pt.empty:
+            _pages.append(_pt.assign(Market=_l) if len(LANGUAGES) > 1 else _pt)
+    _pages_df = pd.concat(_pages, ignore_index=True) if _pages else pd.DataFrame()
+    if not _pages_df.empty and "Market" in _pages_df.columns:
+        _pages_df = _pages_df[["Market"] + [c for c in _pages_df.columns if c != "Market"]]
+        _o = {a: i for i, a in enumerate(["more", "one_more", "pause", "wait", "keep", "watch"])}
+        _pages_df = _pages_df.assign(_o=_pages_df["_action"].map(_o)).sort_values(["_o", "Spent"], ascending=[True, False]).drop(columns="_o")
+    _targets = []
+    for _l in LANGUAGES:
+        _h = config.get("domains", {}).get(_l, "").lower().removeprefix("www.")
+        _t = _ba.next_targets(gsc_df, raw_links.get(_l, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).tolist(),
+                              host=_h, n=10 if len(LANGUAGES) == 1 else 5,
+                              exclude_paths=tuple(config.get("target_exclude", [])))
+        if not _t.empty:
+            _targets.append(_t.assign(Market=_l)[["Market"] + list(_t.columns)] if len(LANGUAGES) > 1 else _t)
+    _targets_df = pd.concat(_targets, ignore_index=True) if _targets else pd.DataFrame()
+    _pipe_val = _ba.pipeline_value(_pipe)
+    _pipe_ok = _ba.approved_only(_pipe)
+    _pipe_total = float(pd.to_numeric(_pipe_ok["Price"], errors="coerce").sum()) if (not _pipe_ok.empty and "Price" in _pipe_ok.columns) else 0.0
+    budget_headline = render_budget_advice(
+        client=CLIENT, period_label=f"{selected_year} · {quarter_label}",
+        overall_key=(roi_total or {}).get("advice", {}).get("key", "unknown"),
+        market_rows=_ba.per_market_roi({l: {"links": live_data.get(l, pd.DataFrame()), "ga4": ga4_data.get(l), "gsc": gsc_df}
+                                        for l in LANGUAGES}, roi_assumptions, _window),
+        pages=_pages_df, targets=_targets_df, pipeline=_pipe_val, pipeline_total=_pipe_total,
+        has_links=bool(any(not raw_links.get(l, pd.DataFrame()).empty for l in LANGUAGES)),
+        has_revenue=HAS_REVENUE, currency="€")
 
 with scorecard_box:
-    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline)
+    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline, budget_headline,
+                     search=None if HAS_REVENUE else (_search_head or {}))
 
 
 # ── Overview: links per language + costs ───────────────────────────────────────
-tabs_main[4].__enter__()
+TAB["links"].__enter__()
 st.metric("Links to check", broken_links if total_links else "—",
           delta=(f"{broken_links} ⚠️" if broken_links else "All good") if total_links else "Nothing placed yet",
           delta_color="inverse" if total_links else "off",
@@ -966,14 +1047,21 @@ def _render_pipeline(lang: str, expanded: bool = False) -> None:
     if opp.empty:
         return
     with st.expander(f"🎯 Opportunities pipeline — {lang} ({len(opp)})", expanded=expanded):
-        approved    = opp[opp["Approved?"].notna()].copy() if "Approved?" in opp.columns else pd.DataFrame()
+        approved    = opp[is_approved(opp["Approved?"])].copy() if "Approved?" in opp.columns else pd.DataFrame()
         st.caption(f"Total in pipeline: **{len(opp)}** &nbsp;·&nbsp; Approved: **{len(approved)}**")
         if "Price" in opp.columns and opp["Price"].notna().any():
             st.caption(f"Proposed budget in this list: **{fmt_eur(opp['Price'].sum())}** "
                        f"(not spent yet; the investment above only counts placed links)")
         opp_cols    = ["Domain", "DR", "Topic", "Price", "Proposed month", "Approved?", "Link to", "Anchor"]
         avail_opp   = [c for c in opp_cols if c in opp.columns]
-        st.dataframe(opp[avail_opp], width="stretch", hide_index=True)
+        _show = opp[avail_opp].copy()
+        for _c in _show.columns:                       # blank sheet cells: empty, not a grey "None"
+            if _show[_c].dtype == object:
+                _show[_c] = _show[_c].fillna("")
+        st.dataframe(_show, width="stretch", hide_index=True, column_config={
+            "Price": st.column_config.NumberColumn("Price", format="€%,.0f"),
+            "DR": st.column_config.NumberColumn("DR", format="%d"),
+            "Link to": st.column_config.LinkColumn("Link to")})
 
 
 for i, lang in enumerate(LANGUAGES):
@@ -1183,6 +1271,9 @@ for i, lang in enumerate(LANGUAGES):
         }
         if "GSC Position" in lp_table.columns:
             col_cfg["GSC Position"] = st.column_config.NumberColumn("GSC Position", format="%.1f")
+        for _c, _lbl in (("GSC Clicks", "GSC Clicks"), ("GSC Impressions", "GSC Impressions"), ("Sessions", "Sessions (GA4)")):
+            if _c in lp_table.columns:
+                col_cfg[_c] = st.column_config.NumberColumn(_lbl, format="%,.0f")
         if "Ahrefs Avg. Pos." in lp_table.columns:
             col_cfg["Ahrefs Avg. Pos."] = st.column_config.NumberColumn("Ahrefs Avg. Pos.", format="%.1f")
         if "Ahrefs Traffic" in lp_table.columns:
@@ -1190,7 +1281,7 @@ for i, lang in enumerate(LANGUAGES):
         if "Revenue" in lp_table.columns:
             col_cfg["Revenue"] = st.column_config.NumberColumn("Revenue (GA4)", format="€%,.0f")
         if "Conversions" in lp_table.columns:
-            col_cfg["Conversions"] = st.column_config.NumberColumn("Conversions", format="%.0f")
+            col_cfg["Conversions"] = st.column_config.NumberColumn("Conversions", format="%,.0f")
         if "ROI" in lp_table.columns:
             lp_table = lp_table.rename(columns={"ROI": "Revenue vs. cost"})
             lp_table["Revenue vs. cost"] = lp_table["Revenue vs. cost"].map(
@@ -1203,8 +1294,16 @@ for i, lang in enumerate(LANGUAGES):
                          "Link to", "Anchor text", "Price", "Target campaign"]
             available = [c for c in show_cols if c in df.columns]
             st.dataframe(
-                df[available].sort_values("LL Date", ascending=False) if "LL Date" in df.columns else df[available],
+                (df[available].sort_values("LL Date", ascending=False) if "LL Date" in df.columns else df[available])
+                .apply(lambda c: c.fillna("") if c.dtype == object else c),
                 width="stretch", hide_index=True,
+                column_config={
+                    "LL Date": st.column_config.DateColumn("Date live", format="DD-MM-YYYY"),
+                    "Live Link": st.column_config.LinkColumn("Live link"),
+                    "Link to": st.column_config.LinkColumn("Links to"),
+                    "Price": st.column_config.NumberColumn("Price", format="€%,.0f"),
+                    "Status code": st.column_config.NumberColumn("Status", format="%d"),
+                },
             )
 
         _render_pipeline(lang)
@@ -1222,11 +1321,13 @@ if broken_links > 0 and "Status code" in all_live.columns:
     want_cols = ["Live Link", "Language", "Domain", "Status code", "Price", "Link to"]
     show_cols = [c for c in want_cols if c in all_live.columns]
     broken_df = all_live[~all_live["Status code"].isin([200])][show_cols]
-    st.dataframe(broken_df, width="stretch", hide_index=True)
+    st.dataframe(broken_df, width="stretch", hide_index=True, column_config={
+        "Live Link": st.column_config.LinkColumn("Live link"), "Link to": st.column_config.LinkColumn("Links to"),
+        "Price": st.column_config.NumberColumn("Price", format="€%,.0f"), "Status code": st.column_config.NumberColumn("Status", format="%d")})
 
 if not CLIENT_MODE:      # runs live HTTP checks on a button press: an analyst tool
     render_health_section(raw_links, FLAGS, demo_mode)
-tabs_main[4].__exit__(None, None, None)
+TAB["links"].__exit__(None, None, None)
 
 
 # ── Impact analysis ────────────────────────────────────────────────────────────
@@ -1446,9 +1547,9 @@ def render_impact_analysis():
 
 
 if not CLIENT_MODE:
-    tabs_main[5].__enter__()
+    TAB["deep"].__enter__()
     render_impact_analysis()
-    tabs_main[5].__exit__(None, None, None)
+    TAB["deep"].__exit__(None, None, None)
 
 
 # ── Footer ─────────────────────────────────────────────────────────────────────

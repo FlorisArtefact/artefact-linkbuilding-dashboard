@@ -20,9 +20,16 @@ def _card(question: str, answer: str, detail: str, color: str) -> str:
             f'<div class="sc-a">{answer}</div><div class="sc-d">{detail}</div></div>')
 
 
-def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None, demo_mode: bool, evidence: dict | None = None) -> None:
+def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None, demo_mode: bool, evidence: dict | None = None,
+                     budget: dict | None = None, search: dict | None = None) -> None:
+    """search: given (also empty) for clients without revenue data: a Search Console card replaces the revenue cards."""
     st.markdown(_CSS, unsafe_allow_html=True)
     cards, positive, known = [], 0, 0
+    budget_card = ""
+    if budget and budget.get("conclusions"):
+        _bc = {"increase": GREEN, "maintain": AMBER, "decrease": AMBER, "start": GREY, "unknown": GREY}.get(budget.get("key"), GREY)
+        budget_card = _card("What do we advise for the budget?", budget["headline"].capitalize(),
+                            budget["conclusions"][0] + " Details in the Budget advice tab.", _bc)
 
     # 1) Payback
     adv = (roi_total or {}).get("advice", {}).get("key", "unknown")
@@ -64,6 +71,14 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
     else:
         cards.append(_card("Do we see organic growth?", "Revenue data pending", "Needs monthly organic revenue per page; it is not connected yet.", GREY))
 
+    if search is not None:   # no revenue data at all: drop the two revenue cards, show Google growth instead
+        cards, positive, known = [], 0, 0
+        if search.get("clicks_before"):
+            ch = search["clicks"] / search["clicks_before"] - 1
+            cards.append(_card("Is the site growing in Google?", "Growing" if ch > 0.05 else ("Stable" if ch > -0.05 else "Fewer clicks"),
+                               f"{search['clicks']:,.0f} clicks in {search['month']:%B %Y} vs. {search['clicks_before']:,.0f} in "
+                               f"{search['month_before']:%B %Y} ({ch:+.0%}). Search Console, whole site.", GREEN if ch > 0.05 else GREY))
+            known += 1; positive += 1 if ch > 0.05 else 0
     # 3) Rankings
     st_ = (ranking or {}).get("status", "unknown")
     if st_ in ("improving", "stable", "mixed", "declining"):
@@ -91,7 +106,7 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
         cards.append(_card("Are rankings getting better?", "No data yet", "Needs placed links in the selected market and ranking data.", GREY))
 
     st.markdown('<div class="section-title">🎯 Campaign scorecard — what the signals say so far</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="sc-wrap">{"".join(cards)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sc-wrap">{budget_card}{"".join(cards)}</div>', unsafe_allow_html=True)
     caveat = ""
     out_ = (growth or {}).get("Outperformance")
     if adv == "increase" and (vd == "slowing" or (not vd and out_ is not None and out_ <= -0.10)):

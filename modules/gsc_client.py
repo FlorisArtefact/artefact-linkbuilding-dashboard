@@ -213,3 +213,34 @@ def get_gsc_linked_summary(creds_file: str, site_url: str, urls: tuple, start: s
                 "top10": int((d["pos"] <= 10).sum()), "pairs": int(len(d))}
     except Exception:
         return None
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_gsc_queries(creds_file: str, site_url: str, days: int = 90) -> pd.DataFrame:
+    """Search terms of the whole property for the last `days` days. Columns: Query, Clicks, Impressions, Position.
+    Empty DataFrame without access."""
+    if not site_url:
+        return pd.DataFrame()
+    try:
+        from googleapiclient.discovery import build
+        from urllib.parse import urlparse
+
+        creds = get_credentials(creds_file, GSC_SCOPES)
+        service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        end = datetime.now().date()
+        body = {"startDate": (end - timedelta(days=days)).isoformat(), "endDate": end.isoformat(),
+                "dimensions": ["query"], "rowLimit": 25000}
+        host = urlparse(site_url).netloc.lower() if "://" in site_url else site_url.replace("sc-domain:", "")
+        bare = host.removeprefix("www.")
+        resp = None
+        for cand in dict.fromkeys([site_url, f"sc-domain:{bare}", f"https://{bare}/", f"https://www.{bare}/"]):
+            try:
+                resp = service.searchanalytics().query(siteUrl=cand, body=body).execute()
+                break
+            except Exception:
+                continue
+        rows = (resp or {}).get("rows", [])
+        return pd.DataFrame([{"Query": r["keys"][0], "Clicks": r.get("clicks", 0), "Impressions": r.get("impressions", 0),
+                              "Position": r.get("position", 0)} for r in rows])
+    except Exception:
+        return pd.DataFrame()

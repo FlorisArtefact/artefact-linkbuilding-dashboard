@@ -58,5 +58,8 @@
   },
   "fx_to_eur": {
     "EN": 1.15
-  }
+  },
+  "target_exclude": [
+    "/blogs/"
+  ]
 }

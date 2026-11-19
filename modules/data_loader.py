@@ -68,6 +68,13 @@ def normalize_link_targets(df: pd.DataFrame, default_host: str = "") -> pd.DataF
     return df
 
 
+def is_approved(col: pd.Series) -> pd.Series:
+    """True where the 'Approved?' cell says yes. Sheets returns empty text for blank cells (not NaN), so a plain
+    notna() would count every row; 'nee' / 'no' / '0' count as not approved."""
+    v = col.fillna("").astype(str).str.strip().str.lower()
+    return ~v.isin(["", "nan", "none", "nee", "no", "n", "false", "0", "-"])
+
+
 def apply_filters(df: pd.DataFrame, year=None, quarter=None, campaign=None) -> pd.DataFrame:
     if df.empty:
         return df

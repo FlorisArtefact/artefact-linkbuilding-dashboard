@@ -200,12 +200,15 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                 with st.expander(f"📋 All linked pages ({len(pt)})"):
                     show = pt[["Landing Page", "Type", "Category", "First link", "Months since", "YoY before", "YoY now", "Acceleration",
                                "Last 3 months", "Status"]].copy()
-                    for c in ("YoY before", "YoY now", "Acceleration"):
-                        show[c] = show[c] * 100
+                    # Text with "—" for missing values: an empty number cell shows as a grey "None" in the table.
+                    for c, unit in (("YoY before", "%"), ("YoY now", "%"), ("Acceleration", " pp")):
+                        show[c] = show[c].map(lambda v, u=unit: "—" if pd.isna(v) else f"{v * 100:+.0f}{u}")
                     show["First link"] = show["First link"].dt.strftime("%b %Y")
+                    show = show.rename(columns={"Acceleration": "Change"})
+                    # "All markets" uses internal keys like https://x/EN/collections/...: show them as "EN · /collections/..."
+                    show["Landing Page"] = show["Landing Page"].astype(str).str.replace(
+                        r"^https://x/([A-Z]{2})(/.*)?$", lambda m: f"{m.group(1)} · {m.group(2) or '/'}", regex=True)
                     st.dataframe(show, width="stretch", hide_index=True, column_config={
-                        "YoY before": st.column_config.NumberColumn(format="%+.0f%%"), "YoY now": st.column_config.NumberColumn(format="%+.0f%%"),
-                        "Acceleration": st.column_config.NumberColumn("Change (pp)", format="%+.0f"),
                         "Last 3 months": st.column_config.NumberColumn(format="%,.0f")})
 
     # ── Whole-domain authority & search visibility (works without GA4) ─────────────
