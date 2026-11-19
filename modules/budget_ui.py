@@ -55,8 +55,9 @@ def render_budget_advice(client: str, period_label: str, overall_key: str, marke
         conclusions.append(f"Put the next links on the {acts['more']} page(s) that already respond, for example "
                            + ", ".join(f"/{t}" if t != "homepage" else t for t in top) + ".")
     if acts.get("pause"):
-        conclusions.append(f"Pause links to {acts['pause']} page(s) that have {ba.MANY_LINKS}+ links without progress; "
-                           "check their content and technique first. That budget can go to the pages above.")
+        names = pages[pages["_action"] == "pause"]["Page"].head(3).map(_short).tolist()
+        conclusions.append("Pause links to " + ", ".join(f"/{t}" if t != "homepage" else "the homepage" for t in names)
+                           + ": enough links already, or no progress despite several links. That budget does more on the pages above.")
     if acts.get("wait"):
         conclusions.append(f"{acts['wait']} page(s) received links recently; judge them in about {ba.WAIT_MONTHS} months.")
     if targets is not None and not targets.empty:

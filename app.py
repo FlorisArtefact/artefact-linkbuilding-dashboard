@@ -976,7 +976,8 @@ with TAB["advice"]:
     _pipe_total = float(pd.to_numeric(_pipe_ok["Price"], errors="coerce").sum()) if (not _pipe_ok.empty and "Price" in _pipe_ok.columns) else 0.0
     budget_headline = render_budget_advice(
         client=CLIENT, period_label=f"{selected_year} · {quarter_label}",
-        overall_key=(roi_total or {}).get("advice", {}).get("key", "unknown"),
+        overall_key=((roi_total or {}).get("advice", {}).get("key", "unknown") if HAS_REVENUE
+                     else ("maintain" if (not _pages_df.empty and (_pages_df["_action"] == "pause").any()) else "unknown")),
         market_rows=_ba.per_market_roi({l: {"links": live_data.get(l, pd.DataFrame()), "ga4": ga4_data.get(l), "gsc": gsc_df}
                                         for l in LANGUAGES}, roi_assumptions, _window),
         pages=_pages_df, targets=_targets_df, pipeline=_pipe_val, pipeline_total=_pipe_total,

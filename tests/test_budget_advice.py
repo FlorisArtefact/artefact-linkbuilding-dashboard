@@ -54,3 +54,10 @@ def test_pipeline_value_ranks_reach_per_euro():
                         "Organic Traffic ahrefs": [10000, 20000, 50000]})
     pv = ba.pipeline_value(opp)
     assert list(pv["Domain"]) == ["a.nl", "b.nl"]
+
+
+def test_homepage_with_many_links_is_paused():
+    links = _links([["https://shop.nl/", "2026-01-01", 100]] * 4)
+    gsc = pd.DataFrame({"Page": ["https://shop.nl/"], "Clicks": [10], "Impressions": [1000], "Avg Position": [12.0]})
+    pt = ba.page_table(links, gsc, today=TODAY)
+    assert pt["_action"].iloc[0] == "pause"

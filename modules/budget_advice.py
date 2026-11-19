@@ -34,7 +34,7 @@ ACTIONS = {
 RULES = [
     f"Market: raise the budget by {STEP['increase']:.0%} when revenue on linked pages is at least 2x the budget in the "
     f"realistic case and above 1x in the cautious case; lower it by {-STEP['decrease']:.0%} below 1x; otherwise keep it.",
-    f"Page: links younger than {WAIT_MONTHS} months are not judged yet. A page that grows faster than before and is not in "
+    f"Page: pages whose first link is younger than {WAIT_MONTHS} months are not judged yet. A page that grows faster than before and is not in "
     f"the top {TOP_POS:.0f} gets the next links. A page with {MANY_LINKS}+ links and no progress is paused until content "
     "and technique are checked.",
     f"Next targets: pages without links that rank between position {PUSH_POS[0]:.0f} and {PUSH_POS[1]:.0f} and get many "
@@ -130,12 +130,16 @@ def page_table(links: pd.DataFrame, gsc: pd.DataFrame | None = None, status: pd.
     for k, grp in lk.groupby("_k"):
         first = grp["_d"].min()
         last = grp["_d"].max()
-        months_last = ((today - last).days / 30.4) if pd.notna(last) else None
+        months_last = ((today - first).days / 30.4) if pd.notna(first) else None   # age of the FIRST link: a page
+        # that keeps getting links would otherwise never be judged
         m = g.get(k, {})
         pos = m.get("Position")
         stt = st_map.get(k)
         n = len(grp)
         action, why = _page_action(n, months_last, pos, m.get("Impressions") or 0, stt)
+        if k.split("/", 1)[-1] == "" and n >= MANY_LINKS and action != "wait":
+            action, why = "pause", (f"The homepage already has {n} links and is found through the brand name anyway; "
+                                     "the next links do more on category pages.")
         rows.append({"Page": grp["Link to"].iloc[0], "Links": n, "Spent": float(grp["_p"].sum()),
                      "First link": first, "Latest link": last,
                      "Clicks (90d)": m.get("Clicks"), "Position": pos, "Development": stt or "",
@@ -148,7 +152,7 @@ def page_table(links: pd.DataFrame, gsc: pd.DataFrame | None = None, status: pd.
 
 def _page_action(n_links: int, months_since_last, pos, impressions: float, status) -> tuple[str, str]:
     if months_since_last is not None and months_since_last < WAIT_MONTHS and status not in ("Accelerating",):
-        return "wait", f"Latest link is {months_since_last:.0f} month(s) old; links need about {WAIT_MONTHS} months to show."
+        return "wait", f"First link is less than {WAIT_MONTHS} months old; links need about that long to show."
     has_pos = pos is not None and not pd.isna(pos)
     if status == "Accelerating":
         if has_pos and pos <= TOP_POS:
