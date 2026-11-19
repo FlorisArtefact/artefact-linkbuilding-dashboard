@@ -142,7 +142,7 @@ def page_table(links: pd.DataFrame, gsc: pd.DataFrame | None = None, status: pd.
                                      "the next links do more on category pages.")
         rows.append({"Page": grp["Link to"].iloc[0], "Links": n, "Spent": float(grp["_p"].sum()),
                      "First link": first, "Latest link": last,
-                     "Clicks (90d)": m.get("Clicks"), "Position": pos, "Development": stt or "",
+                     "Clicks (90d)": m.get("Clicks"), "Impressions (90d)": m.get("Impressions"), "Position": pos, "Development": stt or "",
                      "Action": ACTIONS[action], "Why": why, "_action": action})
     df = pd.DataFrame(rows)
     order = {a: i for i, a in enumerate(["more", "one_more", "pause", "wait", "keep", "watch"])}
@@ -197,6 +197,8 @@ def next_targets(gsc: pd.DataFrame | None, linked_urls, host: str = "", n: int =
         s = s[s["_k"].str.startswith(host.lower().removeprefix("www."))]
     s = s[~s["_k"].isin(linked)]
     s = s[s["_k"].str.split("/", n=1).str[1].fillna("") != ""]  # homepage gets links anyway; target deeper pages
+    s = s[s["_k"].str.split("/", n=1).str[1].fillna("").str.len() > 1]   # section roots like /c/ are not link targets
+    s = s[~s["_k"].str.contains("=", regex=False)]   # filtered views (/f/Material=Jute) are not link targets
     if exclude_paths:
         s = s[~s["_k"].apply(lambda k: any(x in k for x in exclude_paths))]
     s = s[s["Page"].astype(str).str.contains("#") == False]  # noqa: E712  (jump links duplicate their page)
@@ -262,4 +264,72 @@ def per_market_roi(per_lang: dict, a: dict, window_days: int) -> list[dict]:
         res = compute_roi(inv, m["revenue"], m["sessions"] or m["clicks"], window_days, a)
         out.append({"market": lang, "investment": inv, "roi_base": res["scenarios"]["base"]["roi"] if res["mode"] else None,
                     "roi_low": res["scenarios"]["low"]["roi"] if res["mode"] else None, "key": res["advice"]["key"]})
+    return out
+
+
+# ── Where should the next budget go? (the main question) ───────────────────────
+RESPONSE_WEIGHT = {"more": 1.2, "one_more": 1.0, "new": 1.0}   # pages that already respond to links get a small bonus
+FOCUS_WEIGHT = 1.5                                                # pages matching the client's own priorities (config)
+
+
+def allocation(pages: pd.DataFrame | None, targets: pd.DataFrame | None, value_per_visit: dict | None = None,
+               focus: list | None = None, n: int = 10) -> pd.DataFrame:
+    """Rank candidate pages for the next links and propose a share of the next budget per page.
+
+    Candidates: linked pages whose action is 'more' / 'one_more' and pages without links that rank 4-20.
+    Score = extra clicks a move to position 3 would roughly bring (Search Console impressions x CTR gain)
+            x value per visit (GA4 revenue / sessions of that page; site average when the page has none; 1 without GA4)
+            x response bonus (page already responds to links) x client focus (config 'focus_pages').
+    Share = score / sum of the top-n scores. A proposal to discuss, not a forecast."""
+    rows = []
+    vpv = value_per_visit or {}
+    avg = vpv.get("_avg")
+    focus = [f.lower() for f in (focus or []) if f]
+    if pages is not None and not pages.empty:
+        for _, r in pages[pages["_action"].isin(["more", "one_more"])].iterrows():
+            rows.append({"Market": r.get("Market", ""), "Page": r["Page"], "Links so far": int(r["Links"]),
+                         "Position": r["Position"], "Impressions (90d)": r.get("Impressions (90d)"),
+                         "Why here": r["Why"], "_kind": r["_action"]})
+    if targets is not None and not targets.empty:
+        for _, r in targets.iterrows():
+            rows.append({"Market": r.get("Market", ""), "Page": r["Page"], "Links so far": 0, "Position": r["Position"],
+                         "Impressions (90d)": r["Impressions (90d)"],
+                         "Why here": f"No links yet; ranks around position {r['Position']:.0f} with "
+                                     f"{r['Impressions (90d)']:,.0f} impressions.", "_kind": "new"})
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["Position"] = pd.to_numeric(df["Position"], errors="coerce")
+    df["Impressions (90d)"] = pd.to_numeric(df["Impressions (90d)"], errors="coerce").fillna(0)
+    df["Extra clicks (90d, rough)"] = [imp * max(0.0, _ctr(3) - _ctr(p)) if pd.notna(p) else 0.0
+                                       for imp, p in zip(df["Impressions (90d)"], df["Position"])]
+    if vpv:
+        df["Value per visit"] = [vpv.get(norm_key(u), vpv.get("_avg:" + norm_key(u).split("/")[0], avg)) for u in df["Page"]]
+        df["Extra revenue (90d, rough)"] = df["Extra clicks (90d, rough)"] * df["Value per visit"].fillna(0)
+        base = df["Extra revenue (90d, rough)"]
+    else:
+        base = df["Extra clicks (90d, rough)"]
+    df["Client focus"] = ["yes" if any(f in norm_key(u) for f in focus) else "" for u in df["Page"]] if focus else ""
+    df["_score"] = base * df["_kind"].map(RESPONSE_WEIGHT).fillna(1.0) * df["Client focus"].map(
+        lambda v: FOCUS_WEIGHT if v == "yes" else 1.0)
+    df = df[df["_score"] > 0].sort_values("_score", ascending=False).head(n)
+    if df.empty:
+        return df
+    df["Share of next budget"] = df["_score"] / df["_score"].sum()
+    if not focus:
+        df = df.drop(columns="Client focus")
+    if not (df["Market"].astype(str) != "").any():
+        df = df.drop(columns="Market")
+    return df.drop(columns="_score").reset_index(drop=True)
+
+
+def value_per_visit(ga4: pd.DataFrame | None, host: str) -> dict:
+    """{host+path: revenue per organic session} from GA4 per-page data, plus '_avg' for the whole site."""
+    if ga4 is None or ga4.empty or not {"path", "Revenue", "Sessions"} <= set(ga4.columns):
+        return {}
+    g = ga4.groupby(ga4["path"].astype(str).str.rstrip("/").replace("", "/")).agg(R=("Revenue", "sum"), S=("Sessions", "sum"))
+    out = {f"{host}{p if p.startswith('/') else '/' + p}": r / s for p, (r, s) in g.iterrows() if s >= 20}
+    tot_s = g["S"].sum()
+    out["_avg"] = float(g["R"].sum() / tot_s) if tot_s else None
+    out[f"_avg:{host}"] = out["_avg"]
     return out

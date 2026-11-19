@@ -966,7 +966,7 @@ with TAB["advice"]:
     for _l in LANGUAGES:
         _h = config.get("domains", {}).get(_l, "").lower().removeprefix("www.")
         _t = _ba.next_targets(gsc_df, raw_links.get(_l, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).tolist(),
-                              host=_h, n=10 if len(LANGUAGES) == 1 else 5,
+                              host=_h, n=15,
                               exclude_paths=tuple(config.get("target_exclude", [])))
         if not _t.empty:
             _targets.append(_t.assign(Market=_l)[["Market"] + list(_t.columns)] if len(LANGUAGES) > 1 else _t)
@@ -974,6 +974,10 @@ with TAB["advice"]:
     _pipe_val = _ba.pipeline_value(_pipe)
     _pipe_ok = _ba.approved_only(_pipe)
     _pipe_total = float(pd.to_numeric(_pipe_ok["Price"], errors="coerce").sum()) if (not _pipe_ok.empty and "Price" in _pipe_ok.columns) else 0.0
+    _vpv = {}
+    for _l in LANGUAGES:
+        _vpv.update(_ba.value_per_visit(ga4_data.get(_l), config.get("domains", {}).get(_l, "").lower().removeprefix("www.")))
+    _alloc = _ba.allocation(_pages_df, _targets_df, _vpv or None, focus=config.get("focus_pages"), n=12)
     budget_headline = render_budget_advice(
         client=CLIENT, period_label=f"{selected_year} · {quarter_label}",
         overall_key=((roi_total or {}).get("advice", {}).get("key", "unknown") if HAS_REVENUE
@@ -982,10 +986,11 @@ with TAB["advice"]:
                                         for l in LANGUAGES}, roi_assumptions, _window),
         pages=_pages_df, targets=_targets_df, pipeline=_pipe_val, pipeline_total=_pipe_total,
         has_links=bool(any(not raw_links.get(l, pd.DataFrame()).empty for l in LANGUAGES)),
-        has_revenue=HAS_REVENUE, currency="€")
+        has_revenue=HAS_REVENUE, currency="€", allocation=_alloc,
+        focus_set=bool(config.get("focus_pages")))
 
 with scorecard_box:
-    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline, budget_headline,
+    render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline, None,
                      search=None if HAS_REVENUE else (_search_head or {}))
 
 

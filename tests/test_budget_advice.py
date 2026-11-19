@@ -41,12 +41,12 @@ def test_page_actions():
 
 
 def test_next_targets_excludes_linked_and_far_pages():
-    gsc = pd.DataFrame({"Page": ["https://shop.nl/x", "https://shop.nl/y", "https://shop.nl/z", "https://shop.nl/x#faq",
+    gsc = pd.DataFrame({"Page": ["https://shop.nl/xa", "https://shop.nl/ya", "https://shop.nl/za", "https://shop.nl/xa#faq",
                                  "https://other.nl/q"],
                         "Clicks": [5, 1, 0, 1, 9], "Impressions": [5000, 100, 9000, 800, 9999],
                         "Avg Position": [7.0, 9.0, 45.0, 7.0, 6.0]})
-    t = ba.next_targets(gsc, ["https://shop.nl/y"], host="shop.nl")
-    assert list(t["Page"]) == ["https://shop.nl/x"]
+    t = ba.next_targets(gsc, ["https://shop.nl/ya"], host="shop.nl")
+    assert list(t["Page"]) == ["https://shop.nl/xa"]
 
 
 def test_pipeline_value_ranks_reach_per_euro():
@@ -61,3 +61,15 @@ def test_homepage_with_many_links_is_paused():
     gsc = pd.DataFrame({"Page": ["https://shop.nl/"], "Clicks": [10], "Impressions": [1000], "Avg Position": [12.0]})
     pt = ba.page_table(links, gsc, today=TODAY)
     assert pt["_action"].iloc[0] == "pause"
+
+
+def test_allocation_ranks_by_value_and_sums_to_one():
+    pages = pd.DataFrame({"Page": ["https://shop.nl/a", "https://shop.nl/b"], "Links": [2, 1], "Position": [8.0, 5.0],
+                          "Impressions (90d)": [10000, 10000], "Why": ["x", "y"], "_action": ["more", "pause"]})
+    targets = pd.DataFrame({"Page": ["https://shop.nl/c"], "Position": [12.0], "Impressions (90d)": [20000]})
+    vpv = {"shop.nl/a": 1.0, "shop.nl/c": 5.0, "_avg": 2.0}
+    al = ba.allocation(pages, targets, vpv)
+    assert list(al["Page"]) == ["https://shop.nl/c", "https://shop.nl/a"]        # paused page b is not a candidate
+    assert abs(al["Share of next budget"].sum() - 1) < 1e-9
+    al2 = ba.allocation(pages, targets, None, focus=["/a"])
+    assert "Client focus" in al2.columns and al2.set_index("Page").loc["https://shop.nl/a", "Client focus"] == "yes"
