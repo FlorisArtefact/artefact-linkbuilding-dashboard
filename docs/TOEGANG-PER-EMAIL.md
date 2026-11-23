@@ -5,7 +5,7 @@ Stand 18-11-2026. Doel: per klant een live link waar alleen uitgenodigde e-maila
 ## Hoe het werkt
 - Elke klant krijgt een eigen app op Streamlit Community Cloud (zelfde repo, eigen secrets).
 - De app staat bij Streamlit op "public", maar toont zelf eerst een scherm "Sign in with Google". Daarna laat hij alleen e-mailadressen uit de lijst `ALLOWED_EMAILS` door. Zonder login ziet niemand cijfers (getest).
-- Streamlit telt alleen apps met Streamlits eigen privé-instelling mee voor de limiet van één privé-app. Deze route valt daar niet onder, dus BWJ, Hornbach en volgende klanten kunnen allemaal.
+- Streamlit telt alleen apps met Streamlits eigen privé-instelling mee voor de limiet van één privé-app. Deze route valt daar niet onder, dus elke klant kan een eigen app krijgen.
 - Kijkers loggen in met een Google-account. Werkt voor Gmail en Google Workspace. Wie dat niet heeft, kan gratis een Google-account op zijn werkadres maken (zonder Gmail).
 
 ## Eenmalig: Google-inlog aanmaken (jij, ongeveer 10 minuten)
@@ -16,7 +16,7 @@ Stand 18-11-2026. Doel: per klant een live link waar alleen uitgenodigde e-maila
 
 ## Per klant-app: secrets (jij plakt dit in Streamlit, app, Settings, Secrets)
 ```toml
-ALLOWED_EMAILS = ["naam@klant.nl", "floris.broekmeulen@artefact.com"]   # "@klant.nl" laat het hele domein toe
+ALLOWED_EMAILS = ["naam@klant.nl", "naam@artefact.com"]   # "@klant.nl" laat het hele domein toe
 
 [auth]
 redirect_uri = "https://<app-url>.streamlit.app/oauth2callback"

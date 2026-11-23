@@ -824,7 +824,7 @@ if _est_possible and st.session_state.get("ahrefs_est"):
 
 # The page deep-dive needs per-page ranking history (Ahrefs / GSC export); the client view leaves it out instead of
 # showing an empty chart. Rankings per market are in the Results tab.
-HAS_REVENUE = bool(demo_mode or _ga4_ok)   # without GA4 (e.g. Hornbach) the revenue tabs give way to Search Console
+HAS_REVENUE = bool(demo_mode or _ga4_ok)   # without GA4 (Search Console-only clients) the revenue tabs give way to Search Console
 _tab_keys = (([] if HAS_REVENUE else ["eval"]) + ["advice"] + (["effect", "roi"] if HAS_REVENUE else ["search"]) + ["results"]
              + (["reach"] if HAS_REVENUE else []) + ["links"] + ([] if CLIENT_MODE else ["deep"]))
 _tab_names = {"eval": "📊 Campaign evaluation", "advice": "🧭 Budget advice", "effect": "🏆 Effect on organic", "roi": "💶 Revenue vs. budget",

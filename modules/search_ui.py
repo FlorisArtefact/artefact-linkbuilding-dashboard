@@ -1,5 +1,5 @@
 """
-'Search performance' tab for clients without GA4 revenue (e.g. Hornbach Vloeren): what Google Search Console shows
+'Search performance' tab for clients without GA4 revenue : what Google Search Console shows
 for the whole site. Monthly trend, page groups, brand vs. non-brand search terms, top pages.
 """
 from urllib.parse import urlparse

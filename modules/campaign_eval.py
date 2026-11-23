@@ -1,5 +1,5 @@
 """
-Campaign evaluation (clients without GA4, e.g. Hornbach Vloeren): what the link campaign did for the whole domain and
+Campaign evaluation (clients without GA4): what the link campaign did for the whole domain and
 for the pages that received links, measured with Google Search Console. Pure pandas; rendering in campaign_eval_ui.py.
 
 Inputs
