@@ -244,3 +244,86 @@ def get_gsc_queries(creds_file: str, site_url: str, days: int = 90) -> pd.DataFr
                               "Position": r.get("position", 0)} for r in rows])
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_gsc_monthly_by(creds_file: str, site_url: str, dimension: str = "page", months: int = 12) -> pd.DataFrame:
+    """Clicks / impressions / position per month per page (or per query) for the whole property, complete months only.
+    One request per month. Columns: month, Key, Clicks, Impressions, Position. Empty DataFrame without access.
+    Google leaves out rare (anonymised) queries, so per-query totals are lower than the property total."""
+    if not site_url or dimension not in ("page", "query"):
+        return pd.DataFrame()
+    try:
+        from googleapiclient.discovery import build
+        from urllib.parse import urlparse
+
+        creds = get_credentials(creds_file, GSC_SCOPES)
+        service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        host = urlparse(site_url).netloc.lower() if "://" in site_url else site_url.replace("sc-domain:", "")
+        bare = host.removeprefix("www.")
+        this_month = pd.Timestamp(datetime.now().date()).replace(day=1)
+        site, out = None, []
+        for i in range(months, 0, -1):
+            m0 = this_month - pd.DateOffset(months=i)
+            m1 = m0 + pd.DateOffset(months=1) - pd.Timedelta(days=1)
+            body = {"startDate": m0.date().isoformat(), "endDate": m1.date().isoformat(), "dimensions": [dimension],
+                    "rowLimit": 25000}
+            cands = [site] if site else list(dict.fromkeys([site_url, f"sc-domain:{bare}", f"https://{bare}/", f"https://www.{bare}/"]))
+            for cand in cands:
+                try:
+                    resp = service.searchanalytics().query(siteUrl=cand, body=body).execute()
+                    site = cand
+                    out += [{"month": m0, "Key": r["keys"][0], "Clicks": r.get("clicks", 0),
+                             "Impressions": r.get("impressions", 0), "Position": r.get("position", 0)}
+                            for r in resp.get("rows", [])]
+                    break
+                except Exception:
+                    continue
+            if site is None:
+                return pd.DataFrame()
+        return pd.DataFrame(out)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_gsc_page_queries_monthly(creds_file: str, site_url: str, urls: tuple, months: int = 6) -> pd.DataFrame:
+    """Page + search query rows per month for the given pages (exact URL match, trailing slash optional).
+    Columns: month, Page, Query, Clicks, Impressions, Position. Empty DataFrame without access or pages."""
+    if not site_url or not urls:
+        return pd.DataFrame()
+    try:
+        import re
+        from urllib.parse import urlparse
+        from googleapiclient.discovery import build
+
+        creds = get_credentials(creds_file, GSC_SCOPES)
+        service = build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        paths = sorted({(urlparse(str(u).strip()).path or "/").rstrip("/") or "/" for u in urls})
+        pattern = r"^https?://[^/]+(" + "|".join(re.escape(p if p != "/" else "") for p in paths) + r")/?$"
+        host = urlparse(site_url).netloc.lower() if "://" in site_url else site_url.replace("sc-domain:", "")
+        bare = host.removeprefix("www.")
+        this_month = pd.Timestamp(datetime.now().date()).replace(day=1)
+        site, out = None, []
+        for i in range(months, 0, -1):
+            m0 = this_month - pd.DateOffset(months=i)
+            m1 = m0 + pd.DateOffset(months=1) - pd.Timedelta(days=1)
+            body = {"startDate": m0.date().isoformat(), "endDate": m1.date().isoformat(), "dimensions": ["page", "query"],
+                    "rowLimit": 25000, "dimensionFilterGroups": [{"filters": [
+                        {"dimension": "page", "operator": "includingRegex", "expression": pattern}]}]}
+            cands = [site] if site else list(dict.fromkeys([site_url, f"sc-domain:{bare}", f"https://{bare}/", f"https://www.{bare}/"]))
+            for cand in cands:
+                try:
+                    resp = service.searchanalytics().query(siteUrl=cand, body=body).execute()
+                    site = cand
+                    out += [{"month": m0, "Page": r["keys"][0], "Query": r["keys"][1], "Clicks": r.get("clicks", 0),
+                             "Impressions": r.get("impressions", 0), "Position": r.get("position", 0)}
+                            for r in resp.get("rows", [])]
+                    break
+                except Exception:
+                    continue
+            if site is None:
+                return pd.DataFrame()
+        return pd.DataFrame(out)
+    except Exception:
+        return pd.DataFrame()

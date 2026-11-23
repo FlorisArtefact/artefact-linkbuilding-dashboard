@@ -73,6 +73,9 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
 
     if search is not None:   # no revenue data at all: drop the two revenue cards, show Google growth instead
         cards, positive, known = [], 0, 0
+        if search.get("clicks_then"):   # campaign evaluation headline: last month before the links vs. latest month
+            search = {**search, "clicks": search["clicks_now"], "clicks_before": search["clicks_then"],
+                      "month": search["now_month"], "month_before": search["base_month"]}
         if search.get("clicks_before"):
             ch = search["clicks"] / search["clicks_before"] - 1
             cards.append(_card("Is the site growing in Google?", "Growing" if ch > 0.05 else ("Stable" if ch > -0.05 else "Fewer clicks"),
@@ -81,7 +84,16 @@ def render_scorecard(roi_total: dict, growth: dict | None, ranking: dict | None,
             known += 1; positive += 1 if ch > 0.05 else 0
     # 3) Rankings
     st_ = (ranking or {}).get("status", "unknown")
-    if st_ in ("improving", "stable", "mixed", "declining"):
+    if search is not None and search.get("nb_top10_now") is not None:   # Search Console clients: page-1 terms, not avg. position
+        a, b = search["nb_top10_then"], search["nb_top10_now"]
+        good = b > a * 1.05
+        cards.append(_card("Are rankings getting better?", "More terms on page 1" if good else "Stable",
+                           f"Search terms without the brand name in Google's top 10: {a:,} in {search['base_month']:%B %Y} vs. "
+                           f"{'at least ' if search.get('capped') else ''}{b:,} in {search['now_month']:%B %Y}. The average position "
+                           f"drops because the site now shows up for far more terms. See Campaign evaluation.", GREEN if good else GREY))
+        known += 1
+        positive += 1 if good else 0
+    elif st_ in ("improving", "stable", "mixed", "declining"):
         r = ranking
         parts = []
         if r.get("pos_start") is not None:

@@ -54,18 +54,29 @@ def _sheet_to_df(service, spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
     tab doesn't exist yet (e.g. a language not yet added) — only real errors warn."""
     from googleapiclient.errors import HttpError
 
+    import time
+
     try:
-        result = (
-            service.spreadsheets()
-            .values()
-            .get(
-                spreadsheetId=spreadsheet_id,
-                range=sheet_name,
-                valueRenderOption="UNFORMATTED_VALUE",
-                dateTimeRenderOption="FORMATTED_STRING",
-            )
-            .execute()
-        )
+        for attempt in range(3):   # network hiccups (SSL EOF, timeouts) are transient: retry before giving up
+            try:
+                result = (
+                    service.spreadsheets()
+                    .values()
+                    .get(
+                        spreadsheetId=spreadsheet_id,
+                        range=sheet_name,
+                        valueRenderOption="UNFORMATTED_VALUE",
+                        dateTimeRenderOption="FORMATTED_STRING",
+                    )
+                    .execute()
+                )
+                break
+            except HttpError:
+                raise
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
         rows = result.get("values", [])
         if len(rows) < 2:
             return pd.DataFrame()
@@ -81,7 +92,7 @@ def _sheet_to_df(service, spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
         return pd.DataFrame()
     except Exception as e:
         st.warning(f"Could not load sheet '{sheet_name}': {e}")
-        return pd.DataFrame()
+        raise _LoadFailed(str(e)) from e
 
 
 def _normalise_live(df: pd.DataFrame, lang: str) -> pd.DataFrame:
@@ -133,9 +144,27 @@ def _normalise_opp(df: pd.DataFrame, lang: str) -> pd.DataFrame:
     return df
 
 
+class _LoadFailed(Exception):
+    """Raised inside the cached loaders so a failed load is not cached (Streamlit does not cache exceptions)."""
+
+
+def load_live_links_sheets(creds_file: str, spreadsheet_id: str, lang: str, tab_template: str = "") -> pd.DataFrame:
+    try:
+        return _load_live_links_cached(creds_file, spreadsheet_id, lang, tab_template)
+    except _LoadFailed:
+        return pd.DataFrame()
+
+
+def load_opportunities_sheets(creds_file: str, spreadsheet_id: str, lang: str, tab_template: str = "") -> pd.DataFrame:
+    try:
+        return _load_opportunities_cached(creds_file, spreadsheet_id, lang, tab_template)
+    except _LoadFailed:
+        return pd.DataFrame()
+
+
 # Cache for 5 minutes so the dashboard stays up to date without hammering the API
 @st.cache_data(ttl=300, show_spinner=False)
-def load_live_links_sheets(creds_file: str, spreadsheet_id: str, lang: str, tab_template: str = "") -> pd.DataFrame:
+def _load_live_links_cached(creds_file: str, spreadsheet_id: str, lang: str, tab_template: str = "") -> pd.DataFrame:
     service = _get_service(creds_file)
     for name in _tab_names(tab_template, "Live_links_{lang}", lang):
         df = _sheet_to_df(service, spreadsheet_id, name)
@@ -145,7 +174,7 @@ def load_live_links_sheets(creds_file: str, spreadsheet_id: str, lang: str, tab_
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def load_opportunities_sheets(creds_file: str, spreadsheet_id: str, lang: str, tab_template: str = "") -> pd.DataFrame:
+def _load_opportunities_cached(creds_file: str, spreadsheet_id: str, lang: str, tab_template: str = "") -> pd.DataFrame:
     service = _get_service(creds_file)
     for name in _tab_names(tab_template, "Opportunities_{lang}", lang):
         df = _sheet_to_df(service, spreadsheet_id, name)

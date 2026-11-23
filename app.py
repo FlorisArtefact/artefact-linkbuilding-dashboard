@@ -23,6 +23,8 @@ from modules.gsc_client import (
     get_gsc_data_api,
     get_gsc_monthly,
     get_gsc_queries,
+    get_gsc_monthly_by,
+    get_gsc_page_queries_monthly,
     gsc_api_available,
 )
 from modules.ga4_client import (
@@ -54,6 +56,7 @@ from modules import evidence_model as _ev_model
 from modules.growth_model import monthly_pivot as _monthly_pivot
 from modules.budget_ui import render_budget_advice
 from modules.search_ui import render_search_section
+from modules.campaign_eval_ui import render_campaign_eval
 
 load_dotenv()
 
@@ -822,9 +825,9 @@ if _est_possible and st.session_state.get("ahrefs_est"):
 # The page deep-dive needs per-page ranking history (Ahrefs / GSC export); the client view leaves it out instead of
 # showing an empty chart. Rankings per market are in the Results tab.
 HAS_REVENUE = bool(demo_mode or _ga4_ok)   # without GA4 (e.g. Hornbach) the revenue tabs give way to Search Console
-_tab_keys = (["advice"] + (["effect", "roi"] if HAS_REVENUE else ["search"]) + ["results"]
+_tab_keys = (([] if HAS_REVENUE else ["eval"]) + ["advice"] + (["effect", "roi"] if HAS_REVENUE else ["search"]) + ["results"]
              + (["reach"] if HAS_REVENUE else []) + ["links"] + ([] if CLIENT_MODE else ["deep"]))
-_tab_names = {"advice": "🧭 Budget advice", "effect": "🏆 Effect on organic", "roi": "💶 Revenue vs. budget",
+_tab_names = {"eval": "📊 Campaign evaluation", "advice": "🧭 Budget advice", "effect": "🏆 Effect on organic", "roi": "💶 Revenue vs. budget",
               "search": "🔎 Search performance", "results": "📈 Results", "reach": "🌍 Reach (referral & mentions)",
               "links": "🔗 Links & health", "deep": "🔬 Page deep-dive"}
 TAB = dict(zip(_tab_keys, st.tabs([_tab_names[k] for k in _tab_keys])))
@@ -989,9 +992,26 @@ with TAB["advice"]:
         has_revenue=HAS_REVENUE, currency="€", allocation=_alloc,
         focus_set=bool(config.get("focus_pages")))
 
+_eval_head = None
+# ── Campaign evaluation (first tab for clients without revenue): domain + focus pages + what to build on ──────
+if "eval" in TAB:
+    with TAB["eval"]:
+        _el = next((l for l in LANGUAGES if config.get("gsc_properties", {}).get(l)), LANGUAGES[0])
+        _es = config.get("gsc_properties", {}).get(_el, "")
+        _elk = raw_links.get(_el, pd.DataFrame())
+        _eurls = tuple(sorted(u for u in _elk.get("Link to", pd.Series(dtype=str)).dropna().astype(str).unique() if u.strip()))
+        _eval_head = render_campaign_eval(
+            client=CLIENT,
+            monthly=get_gsc_monthly(_creds_file, _es) if (use_gsc_api and _es) else pd.DataFrame(),
+            links=_elk,
+            queries=get_gsc_monthly_by(_creds_file, _es, "query", 9) if (use_gsc_api and _es) else pd.DataFrame(),
+            page_queries=get_gsc_page_queries_monthly(_creds_file, _es, _eurls, 6) if (use_gsc_api and _es and _eurls) else pd.DataFrame(),
+            allocation=_alloc, brand_terms=config.get("brand_terms") or [CLIENT.split(" ")[0]],
+            launch_month=pd.Timestamp(config["launch_month"]) if config.get("launch_month") else None)
+
 with scorecard_box:
     render_scorecard(roi_total, growth_headline, ranking_result.get("_total"), demo_mode, evidence_headline, None,
-                     search=None if HAS_REVENUE else (_search_head or {}))
+                     search=None if HAS_REVENUE else {**(_search_head or {}), **(_eval_head or {})})
 
 
 # ── Overview: links per language + costs ───────────────────────────────────────
