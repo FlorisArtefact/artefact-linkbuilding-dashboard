@@ -101,6 +101,19 @@ def _check_login():
 
 
 # ── Password gate ──────────────────────────────────────────────────────────────
+def _clients_secret() -> dict:
+    """Optional [clients.<key>] blocks in the secrets: password = "...", config = '<client config JSON>' (no config =
+    the repo's config.json). Lets one deployed app serve several clients, each with its own password."""
+    try:
+        return {k: dict(v) for k, v in dict(st.secrets.get("clients", {})).items()}
+    except Exception:
+        return {}
+
+
+def _client_passwords() -> dict:
+    return {str(v["password"]): k for k, v in _clients_secret().items() if v.get("password")}
+
+
 def _check_password() -> bool:
     """Return True if no password is set, or if the user entered the correct one."""
     try:
@@ -108,7 +121,8 @@ def _check_password() -> bool:
     except Exception:
         required = os.getenv("APP_PASSWORD", "")
 
-    if not required:
+    pmap = _client_passwords()
+    if not required and not pmap:
         return True  # No password configured — skip gate
 
     if st.session_state.get("_authenticated"):
@@ -141,7 +155,11 @@ def _check_password() -> bool:
     pwd = st.text_input("Password", type="password", label_visibility="collapsed",
                         placeholder="Enter password...")
     if st.button("Login", width="stretch", type="primary"):
-        if pwd == required:
+        if pwd and pwd in pmap:                   # one app, several clients: the password picks the client
+            st.session_state["_authenticated"] = True
+            st.session_state["_client"] = pmap[pwd]
+            st.rerun()
+        elif required and pwd == required:
             st.session_state["_authenticated"] = True
             st.rerun()
         else:
@@ -277,6 +295,15 @@ def load_config() -> dict:   # not cached: a fallback must never get stuck for t
     # Multi-client hosting: each deployed app carries its OWN client config in its secrets
     # (CLIENT_CONFIG_JSON = the content of that client's config.json). That keeps client names,
     # sheet IDs and domains out of the repo, so one codebase can serve many isolated apps.
+    ck = st.session_state.get("_client")
+    if ck:
+        c = _clients_secret().get(ck, {}).get("config")
+        if c:
+            return json.loads(c) if isinstance(c, str) else dict(c)
+        cfg_path = os.path.join(_APP_DIR, "config.json")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, encoding="utf-8") as f:
+                return json.load(f)
     raw = ""
     try:
         raw = st.secrets.get("CLIENT_CONFIG_JSON", "")
@@ -329,6 +356,11 @@ _sheet_id = config.get("google_sheets", {}).get("spreadsheet_id", "")
 with st.sidebar:
     st.markdown(f"<div style='font-size:1.25rem;font-weight:700;color:{NAVY};line-height:1.1'>Artefact</div>", unsafe_allow_html=True)
     st.markdown(f"<div style='font-size:0.75rem;color:{MID};margin-bottom:.6rem;'>Linkbuilding dashboard</div>", unsafe_allow_html=True)
+    if st.session_state.get("_client") and len(_clients_secret()) > 1:
+        if st.button("↩ Other client / sign out", width="stretch"):
+            for _k in ("_authenticated", "_client"):
+                st.session_state.pop(_k, None)
+            st.rerun()
     if CLIENT_MODE:
         _sb_filters, _sb_setup = st.container(), st.container()   # set-up stays empty for clients
     else:
