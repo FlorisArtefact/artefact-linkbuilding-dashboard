@@ -1,3 +1,4 @@
+import html
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -725,6 +726,8 @@ def _client_logo_html() -> str:
     path = config.get("logo", "")
     if not path:
         return ""
+    if path.startswith(("data:image/", "https://")):   # logo kept in the client's secrets, not in the public repo
+        return f'<div class="client-logo"><img src="{html.escape(path, quote=True)}" alt="{CLIENT}"></div>'
     full = path if os.path.isabs(path) else os.path.join(_APP_DIR, path)
     try:
         import base64, mimetypes
