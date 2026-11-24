@@ -8,6 +8,22 @@ import os
 from urllib.parse import urlparse
 from datetime import datetime
 from dotenv import load_dotenv
+import sys as _sys
+import glob as _glob
+
+
+def _fresh_modules() -> None:
+    """After a code update the server keeps the OLD modules/* in memory while app.py itself is re-read, which breaks
+    new calls (AttributeError). When any module file changed since the last run, drop them so they import fresh."""
+    files = _glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules", "*.py"))
+    stamp = tuple(sorted((os.path.basename(f), os.path.getmtime(f), os.path.getsize(f)) for f in files))
+    if getattr(_sys, "_lb_modules_stamp", None) != stamp:
+        for name in [m for m in list(_sys.modules) if m == "modules" or m.startswith("modules.")]:
+            del _sys.modules[name]
+        _sys._lb_modules_stamp = stamp
+
+
+_fresh_modules()
 
 from modules.data_loader import (
     load_live_links,
