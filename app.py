@@ -115,6 +115,26 @@ def _client_passwords() -> dict:
     return {str(v["password"]): k for k, v in _clients_secret().items() if v.get("password")}
 
 
+_DB_ICON = ('<svg width="20" height="22" viewBox="0 0 24 24" fill="none" stroke="#002554" stroke-width="2" '
+            'xmlns="http://www.w3.org/2000/svg"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 '
+            '8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>')
+
+
+def _sources_html() -> str:
+    """Row with the data sources the dashboard combines (shown on the login card)."""
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "sources")
+    def icon(f):
+        try:
+            with open(os.path.join(d, f), encoding="utf-8") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+    items = [(icon("gsc.svg"), "Google Search Console"), (icon("ga4.svg"), "Google Analytics 4"),
+             (icon("ahrefs.svg"), "Ahrefs"), (_DB_ICON, "Artefact link database")]
+    chips = "".join(f'<div class="lg-src">{i}<span>{t}</span></div>' for i, t in items)
+    return f'<div class="lg-srcwrap"><div class="lg-srclab">One view on</div><div class="lg-srcs">{chips}</div></div>'
+
+
 def _check_password() -> bool:
     """Return True if no password is set, or if the user entered the correct one."""
     try:
@@ -150,22 +170,28 @@ def _check_password() -> bool:
     .lg-kicker {color:#FF0066; font-size:.74rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase;}
     .lg-title {color:#002554; font-size:1.75rem; font-weight:700; line-height:1.15; margin:.35rem 0 .5rem;}
     .lg-sub {color:#5B6B86; font-size:.92rem; line-height:1.45; margin-bottom:1.2rem;}
-    [data-testid="stForm"] [data-baseweb="input"] {border:1px solid #C9D2E3 !important; border-radius:10px !important; background:#F6F8FB !important;}
+    [data-testid="stForm"] [data-baseweb="input"], [data-testid="stForm"] [data-testid="stTextInputRootElement"] {border:1px solid #C9D2E3 !important; border-radius:10px !important; background:#F6F8FB !important;}
     [data-testid="stForm"] button[kind="primaryFormSubmit"], [data-testid="stForm"] button[data-testid="stBaseButton-primaryFormSubmit"] {
         background: linear-gradient(90deg, #002554, #FF0066) !important; border:none !important; border-radius:10px !important;
         font-weight:600 !important; height:2.9rem;}
+    .lg-srcwrap {border-top:1px solid #E6EAF2; margin-top:1.3rem; padding-top:1rem;}
+    .lg-srclab {color:#8B9BB4; font-size:.7rem; font-weight:600; letter-spacing:.12em; text-transform:uppercase; margin-bottom:.6rem;}
+    .lg-srcs {display:grid; grid-template-columns:1fr 1fr; gap:.55rem;}
+    .lg-src {display:flex; align-items:center; gap:.55rem; background:#F6F8FB; border-radius:10px; padding:.5rem .65rem;
+        color:#1B2D5B; font-size:.8rem; font-weight:500; line-height:1.2;}
+    .lg-src svg {flex:0 0 auto;}
     .lg-foot {color:rgba(255,255,255,.8); font-size:.8rem; text-align:center; margin-top:1.4rem; letter-spacing:.04em;}
     </style>
     """, unsafe_allow_html=True)
     _l, _mid, _r = st.columns([1, 1.15, 1])
     with _mid:
         with st.form("login", border=False):
-            st.markdown(f'{_logo}<div class="lg-kicker">Linkbuilding &amp; SEO</div>'
-                        '<div class="lg-title">Linkbuilding Dashboard</div>'
+            st.markdown(f'{_logo}<div class="lg-title">Linkbuilding Dashboard</div>'
                         '<div class="lg-sub">What our link campaigns do for your visibility in Google. '
                         'Enter the password you received from Artefact.</div>', unsafe_allow_html=True)
             pwd = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Password")
             submitted = st.form_submit_button("Sign in", width="stretch", type="primary")
+            st.markdown(_sources_html(), unsafe_allow_html=True)
         st.markdown('<div class="lg-foot">Artefact · Data &amp; AI consulting</div>', unsafe_allow_html=True)
     if submitted:
         if pwd and pwd in pmap:                   # one app, several clients: the password picks the client
@@ -1013,12 +1039,16 @@ with TAB["advice"]:
         _pages_df = _pages_df[["Market"] + [c for c in _pages_df.columns if c != "Market"]]
         _o = {a: i for i, a in enumerate(["more", "one_more", "pause", "wait", "keep", "watch"])}
         _pages_df = _pages_df.assign(_o=_pages_df["_action"].map(_o)).sort_values(["_o", "Spent"], ascending=[True, False]).drop(columns="_o")
+    _curve = _ba.own_ctr_curve(gsc_df)
+    _prices = pd.concat([pd.to_numeric(raw_links.get(l, pd.DataFrame()).get("Price", pd.Series(dtype=float)), errors="coerce")
+                         for l in LANGUAGES], ignore_index=True) if LANGUAGES else pd.Series(dtype=float)
+    _link_price = float(_prices[_prices > 0].mean()) if (_prices > 0).any() else None
     _targets = []
     for _l in LANGUAGES:
         _h = config.get("domains", {}).get(_l, "").lower().removeprefix("www.")
         _t = _ba.next_targets(gsc_df, raw_links.get(_l, pd.DataFrame()).get("Link to", pd.Series(dtype=str)).tolist(),
                               host=_h, n=15,
-                              exclude_paths=tuple(config.get("target_exclude", [])))
+                              exclude_paths=tuple(config.get("target_exclude", [])), curve=_curve)
         if not _t.empty:
             _targets.append(_t.assign(Market=_l)[["Market"] + list(_t.columns)] if len(LANGUAGES) > 1 else _t)
     _targets_df = pd.concat(_targets, ignore_index=True) if _targets else pd.DataFrame()
@@ -1028,7 +1058,8 @@ with TAB["advice"]:
     _vpv = {}
     for _l in LANGUAGES:
         _vpv.update(_ba.value_per_visit(ga4_data.get(_l), config.get("domains", {}).get(_l, "").lower().removeprefix("www.")))
-    _alloc = _ba.allocation(_pages_df, _targets_df, _vpv or None, focus=config.get("focus_pages"), n=12)
+    _alloc = _ba.allocation(_pages_df, _targets_df, _vpv or None, focus=config.get("focus_pages"), n=12,
+                            curve=_curve, link_price=_link_price)
     budget_headline = render_budget_advice(
         client=CLIENT, period_label=f"{selected_year} · {quarter_label}",
         overall_key=((roi_total or {}).get("advice", {}).get("key", "unknown") if HAS_REVENUE
@@ -1038,7 +1069,7 @@ with TAB["advice"]:
         pages=_pages_df, targets=_targets_df, pipeline=_pipe_val, pipeline_total=_pipe_total,
         has_links=bool(any(not raw_links.get(l, pd.DataFrame()).empty for l in LANGUAGES)),
         has_revenue=HAS_REVENUE, currency="€", allocation=_alloc,
-        focus_set=bool(config.get("focus_pages")))
+        focus_set=bool(config.get("focus_pages")), curve=_curve, link_price=_link_price)
 
 _eval_head = None
 # ── Campaign evaluation (first tab for clients without revenue): domain + focus pages + what to build on ──────

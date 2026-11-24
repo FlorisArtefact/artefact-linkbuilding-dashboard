@@ -47,7 +47,8 @@ def _short(u) -> str:
 def render_budget_advice(client: str, period_label: str, overall_key: str, market_rows: list, pages: pd.DataFrame,
                          targets: pd.DataFrame, pipeline: pd.DataFrame, pipeline_total: float, has_links: bool,
                          has_revenue: bool, currency: str = "€", market_names: dict | None = None,
-                         allocation: pd.DataFrame | None = None, focus_set: bool = False) -> dict:
+                         allocation: pd.DataFrame | None = None, focus_set: bool = False,
+                         curve: dict | None = None, link_price: float | None = None) -> dict:
     st.markdown(_CSS, unsafe_allow_html=True)
     acts = pages["_action"].value_counts().to_dict() if pages is not None and not pages.empty else {}
     al = allocation if allocation is not None else pd.DataFrame()
@@ -88,6 +89,9 @@ def render_budget_advice(client: str, period_label: str, overall_key: str, marke
     st.markdown(f'<div class="ba-basis">Based on {", ".join(basis[:-1])} and {basis[-1]}. '
                 'Shares and amounts are a proposal to discuss.</div>', unsafe_allow_html=True)
 
+    if not al.empty and "How calculated" in al.columns:
+        _method(al.iloc[0], curve, link_price, currency, valued)
+
     # ── 1. Allocation ─────────────────────────────────────────────────────────
     if not al.empty:
         st.markdown('<div class="section-title">1 · Where to spend the next budget</div>', unsafe_allow_html=True)
@@ -108,12 +112,17 @@ def render_budget_advice(client: str, period_label: str, overall_key: str, marke
             "Value per visit": st.column_config.NumberColumn("Value per visit", format="€%.2f",
                 help="GA4 organic revenue ÷ organic sessions of this page; site average when the page has too few visits."),
             "Extra revenue (90d, rough)": st.column_config.NumberColumn("Extra revenue at top 3 (90d, rough)", format="€%,.0f"),
+            "Target position": st.column_config.NumberColumn("Realistic target position", format="%d"),
+            "Extra revenue per year (rough)": st.column_config.NumberColumn("Extra revenue per year (rough)", format="€%,.0f"),
+            "Upside per € of one link": st.column_config.NumberColumn("Upside per year ÷ price of one link", format="%.1f×",
+                help="What reaching the target is worth per year, divided by the average price of one link so far."),
+            "How calculated": st.column_config.TextColumn("The sum", width="large"),
             "Client focus": st.column_config.TextColumn("Your priority"),
             "Why here": st.column_config.TextColumn("Why here", width="large"),
         }
-        order = [c for c in ["Market", "Page", "Share of next budget", "Links so far", "Position", "Impressions (90d)",
-                             "Extra clicks (90d, rough)", "Value per visit", "Extra revenue (90d, rough)", "Client focus",
-                             "Why here"] if c in show.columns]
+        order = [c for c in ["Market", "Page", "Share of next budget", "Links so far", "Position", "Target position",
+                             "Impressions (90d)", "Extra clicks (90d, rough)", "Value per visit", "Extra revenue per year (rough)",
+                             "Upside per € of one link", "How calculated", "Client focus", "Why here"] if c in show.columns]
         st.dataframe(show[order], width="stretch", hide_index=True, column_config=cfg)
         if not focus_set:
             st.caption("Your own priorities (for example a brand or product range you want to grow) can be added; "
@@ -165,11 +174,70 @@ def render_budget_advice(client: str, period_label: str, overall_key: str, marke
                                         "Signal": st.column_config.TextColumn("Room for more budget?")})
 
     with st.expander("📐 How this advice is made"):
-        st.markdown("- Ranking of pages: extra clicks a move to position 3 would roughly bring (impressions × typical "
-                    "click-rate gain)" + (" × value per visit (GA4)" if valued else "") + ", × 1.2 for pages that already "
+        st.markdown("- Ranking of pages: extra clicks a realistic step up would roughly bring (impressions × click-rate "
+                    "gain measured on your own site)" + (" × value per visit (GA4)" if valued else "") + ", × 1.2 for pages that already "
                     "respond to links" + (", × 1.5 for your priority pages" if focus_set else "") +
                     ". The share of the next budget follows that score.")
         for r in ba.RULES:
             st.markdown(f"- {r}")
         st.markdown("- Links also lift the whole domain and work with a delay, so a page-level signal is a direction, not proof.")
     return {}
+
+
+_SOURCES = [("Search Engine Land: realistic SEO forecasting, step by step", "https://searchengineland.com/guide/seo-forecasting"),
+            ("Pixis: forecasting extra clicks from SEO (impressions × CTR at target, own CTR curve)",
+             "https://pixis.ai/blog/how-to-forecast-extra-clicks-from-seo-fixes/"),
+            ("Search Engine Journal: top-result CTR fell after AI Overviews (why we measure your own CTR)",
+             "https://www.searchenginejournal.com/google-ctrs-drop-32-for-top-result-after-ai-overview-rollout/551730/"),
+            ("Ahrefs: AI Overviews reduce clicks", "https://ahrefs.com/blog/ai-overviews-reduce-clicks-update")]
+
+_CARD = ('<div style="background:#fff;border-radius:12px;padding:.8rem 1rem;border-top:3px solid #E5007D;height:100%;'
+         'box-shadow:0 2px 10px rgba(27,45,91,.06)"><div style="font-weight:700;color:#1B2D5B">{h}</div>'
+         '<div style="font-size:.85rem;color:#4A5875;margin-top:.3rem">{t}</div></div>')
+
+
+def _method(top, curve, link_price, cur, valued) -> None:
+    """Visible explanation of the advice: four steps, the sum for the top page, the CTR curve used and sources."""
+    st.markdown('<div class="section-title">How the advice is calculated</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ba-basis">The standard way to size an SEO opportunity: <b>how often a page is seen in Google '
+                '× how many more of those people click when it ranks higher × what a visit is worth</b>. Every number comes '
+                'from your own Search Console and GA4 data, not from estimates.</div>', unsafe_allow_html=True)
+    steps = [("1 · Demand", "How often the page was shown in Google in the last 90 days (Search Console impressions)."),
+             ("2 · Realistic step up", "Page 1 → top 3. Page 2 → position 7. Not a jump to #1."),
+             ("3 · Click chance", "Share of people that click at each position, <b>measured on your own site</b>. "
+                                  "Published benchmarks only fill gaps."),
+             ("4 · Value of a visit", "GA4 organic revenue ÷ organic sessions of that page (site average when the page "
+                                      "has few visits)." if valued else "Without GA4 revenue the ranking uses extra clicks.")]
+    for col, (h, t) in zip(st.columns(4), steps):
+        col.markdown(_CARD.format(h=h, t=t), unsafe_allow_html=True)
+    c3 = (curve or {}).get((3, 3), {})
+    if c3.get("source") == "own data" and c3.get("ctr", 1) < c3.get("benchmark", 0):
+        st.markdown(f'<div class="ba-basis" style="margin-top:.7rem">On this site the measured click chance at position 3 is '
+                    f'{c3["ctr"]:.1%}, below the published {c3["benchmark"]:.0%}. Using your own numbers keeps the upside '
+                    'conservative.</div>', unsafe_allow_html=True)
+    ex = f"<b>{_short(top['Page'])}</b>: {top['How calculated']}"
+    yr = top.get("Extra revenue per year (rough)")
+    if valued and yr is not None and pd.notna(yr):
+        ex += f" ≈ <b>{cur}{yr:,.0f} per year</b>"
+        if link_price:
+            ex += (f". One link costs on average {cur}{link_price:,.0f}, so reaching the target is worth about "
+                   f"<b>{yr / link_price:.0f}× the price of one link</b> per year")
+    st.markdown('<div style="background:#EEF1F6;border-radius:12px;padding:.9rem 1.1rem;margin:.8rem 0;color:#1B2D5B">'
+                '<div style="font-size:.72rem;letter-spacing:.8px;text-transform:uppercase;opacity:.7">'
+                f'Worked example: the top page</div><div style="margin-top:.3rem">{ex}.</div></div>', unsafe_allow_html=True)
+    st.markdown("<div class=\"ba-basis\">Share of the next budget per page = that page's upside ÷ the upside of all pages "
+                "in the list. Pages that already moved after earlier links count 1.2×. This ranks where money works best; "
+                "how many links a page needs to reach the target still depends on competition, content and technique.</div>",
+                unsafe_allow_html=True)
+    with st.expander("Click chance per position used here, and sources"):
+        if curve:
+            rows = [{"Position": (f"{lo}" if lo == hi else f"{lo}–{hi}"), "Click chance": v["ctr"] * 100,
+                     "Source": v["source"], "Impressions measured (90d)": v["impressions"],
+                     "Published benchmark": v["benchmark"] * 100} for (lo, hi), v in curve.items()]
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", column_config={
+                "Click chance": st.column_config.NumberColumn(format="%.1f%%"),
+                "Published benchmark": st.column_config.NumberColumn(format="%.1f%%"),
+                "Impressions measured (90d)": st.column_config.NumberColumn(format="%,.0f")})
+            st.caption("Homepages are left out of the measurement because brand searches inflate their click rate. "
+                       "Bands with fewer than 2,000 impressions use the benchmark.")
+        st.markdown("\n".join(f"- [{t}]({u})" for t, u in _SOURCES))

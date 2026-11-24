@@ -175,17 +175,63 @@ def _page_action(n_links: int, months_since_last, pos, impressions: float, statu
 
 
 # ── 3. Next targets ────────────────────────────────────────────────────────────
-# Rough CTR by position (organic, desktop+mobile). Used only to rank pages by how much one step up is worth.
-_CTR = {1: .28, 2: .15, 3: .10, 4: .07, 5: .05, 6: .04, 7: .03, 8: .025, 9: .02, 10: .018}
+# Click-through rate per Google position. Published benchmark (rounded from large CTR studies, e.g. Sistrix and
+# Backlinko: ~28% at 1, ~15% at 2, ~11% at 3, ~2.5% at 10, ~1% on page 2). Used only where the client's own Search
+# Console data is too thin; see own_ctr_curve().
+BENCHMARK_CTR = {1: .28, 2: .15, 3: .11, 4: .08, 5: .06, 6: .05, 7: .04, 8: .03, 9: .025, 10: .024}
+BANDS = [(1, 1), (2, 2), (3, 3), (4, 5), (6, 10), (11, 20)]
+MIN_BAND_IMPRESSIONS = 2000   # below this a band uses the benchmark
+_CTR = BENCHMARK_CTR          # backwards compatible name
 
 
-def _ctr(pos: float) -> float:
+def _bench(p: int) -> float:
+    return BENCHMARK_CTR.get(p, 0.01 if p <= 20 else 0.003)
+
+
+def _ctr(pos: float, curve: dict | None = None) -> float:
     p = max(1, int(round(pos)))
-    return _CTR.get(p, 0.015 if p <= 20 else 0.005)
+    if curve:
+        for (lo, hi) in BANDS:
+            if lo <= p <= hi and (lo, hi) in curve:
+                return curve[(lo, hi)]["ctr"]
+    return _bench(p)
+
+
+def own_ctr_curve(gsc: pd.DataFrame | None) -> dict:
+    """CTR per position band measured on the client's own site (Search Console, last 90 days, homepages left out
+    because brand searches inflate them). Bands with fewer than MIN_BAND_IMPRESSIONS impressions use the benchmark.
+    The curve is made non-increasing (a better position never gets a lower click rate)."""
+    out, prev = {}, None
+    s = None
+    if gsc is not None and not gsc.empty and {"Page", "Clicks", "Impressions", "Avg Position"} <= set(gsc.columns):
+        s = gsc.copy()
+        s["_k"] = s["Page"].apply(norm_key)
+        s = s[s["_k"].str.split("/", n=1).str[1].fillna("") != ""]
+        s["_p"] = pd.to_numeric(s["Avg Position"], errors="coerce").round()
+        s["Clicks"] = pd.to_numeric(s["Clicks"], errors="coerce").fillna(0)
+        s["Impressions"] = pd.to_numeric(s["Impressions"], errors="coerce").fillna(0)
+    for lo, hi in BANDS:
+        bench = sum(_bench(p) for p in range(lo, hi + 1)) / (hi - lo + 1)
+        ctr, src, imp = bench, "benchmark", 0.0
+        if s is not None:
+            b = s[(s["_p"] >= lo) & (s["_p"] <= hi)]
+            imp = float(b["Impressions"].sum())
+            if imp >= MIN_BAND_IMPRESSIONS:
+                ctr, src = float(b["Clicks"].sum()) / imp, "own data"
+        if prev is not None and ctr > prev:
+            ctr = prev
+        out[(lo, hi)] = {"ctr": ctr, "source": src, "impressions": imp, "benchmark": bench}
+        prev = ctr
+    return out
+
+
+def target_position(pos: float) -> int:
+    """A realistic next step, not a jump to #1: from page 1 to the top 3, from page 2 to the middle of page 1."""
+    return 3 if pos <= 10.5 else 7
 
 
 def next_targets(gsc: pd.DataFrame | None, linked_urls, host: str = "", n: int = 10,
-                 exclude_paths: tuple = ()) -> pd.DataFrame:
+                 exclude_paths: tuple = (), curve: dict | None = None) -> pd.DataFrame:
     """Pages WITHOUT links that rank between PUSH_POS and get impressions, ranked by the extra clicks a move
     to position 3 would roughly bring (impressions x CTR difference). A ranking aid, not a forecast."""
     if gsc is None or gsc.empty or "Page" not in gsc.columns:
@@ -208,11 +254,12 @@ def next_targets(gsc: pd.DataFrame | None, linked_urls, host: str = "", n: int =
     if s.empty:
         return pd.DataFrame()
     s["Position"] = pd.to_numeric(s["Avg Position"], errors="coerce")
-    s["Potential"] = s.apply(lambda r: r["Impressions"] * max(0.0, _ctr(3) - _ctr(r["Position"])), axis=1)
+    s["Potential"] = s.apply(lambda r: r["Impressions"] * max(0.0, _ctr(target_position(r["Position"]), curve)
+                                                               - _ctr(r["Position"], curve)), axis=1)
     s = s.sort_values("Potential", ascending=False).head(n)
     return s[["Page", "Clicks", "Impressions", "Position", "Potential"]].rename(
         columns={"Clicks": "Clicks (90d)", "Impressions": "Impressions (90d)",
-                 "Potential": "Extra clicks per 90d at position 3 (rough)"}).reset_index(drop=True)
+                 "Potential": "Extra clicks per 90d at target (rough)"}).reset_index(drop=True)
 
 
 def approved_only(opps: pd.DataFrame) -> pd.DataFrame:
@@ -273,11 +320,12 @@ FOCUS_WEIGHT = 1.5                                                # pages matchi
 
 
 def allocation(pages: pd.DataFrame | None, targets: pd.DataFrame | None, value_per_visit: dict | None = None,
-               focus: list | None = None, n: int = 10) -> pd.DataFrame:
+               focus: list | None = None, n: int = 10, curve: dict | None = None,
+               link_price: float | None = None, currency: str = "€") -> pd.DataFrame:
     """Rank candidate pages for the next links and propose a share of the next budget per page.
 
     Candidates: linked pages whose action is 'more' / 'one_more' and pages without links that rank 4-20.
-    Score = extra clicks a move to position 3 would roughly bring (Search Console impressions x CTR gain)
+    Score = extra clicks a realistic step up (target_position) would roughly bring (Search Console impressions x CTR gain)
             x value per visit (GA4 revenue / sessions of that page; site average when the page has none; 1 without GA4)
             x response bonus (page already responds to links) x client focus (config 'focus_pages').
     Share = score / sum of the top-n scores. A proposal to discuss, not a forecast."""
@@ -301,14 +349,21 @@ def allocation(pages: pd.DataFrame | None, targets: pd.DataFrame | None, value_p
     df = pd.DataFrame(rows)
     df["Position"] = pd.to_numeric(df["Position"], errors="coerce")
     df["Impressions (90d)"] = pd.to_numeric(df["Impressions (90d)"], errors="coerce").fillna(0)
-    df["Extra clicks (90d, rough)"] = [imp * max(0.0, _ctr(3) - _ctr(p)) if pd.notna(p) else 0.0
-                                       for imp, p in zip(df["Impressions (90d)"], df["Position"])]
+    df["Target position"] = pd.to_numeric(pd.Series([target_position(p) if pd.notna(p) else None for p in df["Position"]],
+                                                     index=df.index), errors="coerce")
+    df["CTR now"] = [_ctr(p, curve) if pd.notna(p) else 0.0 for p in df["Position"]]
+    df["CTR at target"] = [_ctr(t, curve) if pd.notna(t) else 0.0 for t in df["Target position"]]
+    df["Extra clicks (90d, rough)"] = df["Impressions (90d)"] * (df["CTR at target"] - df["CTR now"]).clip(lower=0)
     if vpv:
         df["Value per visit"] = [vpv.get(norm_key(u), vpv.get("_avg:" + norm_key(u).split("/")[0], avg)) for u in df["Page"]]
         df["Extra revenue (90d, rough)"] = df["Extra clicks (90d, rough)"] * df["Value per visit"].fillna(0)
+        df["Extra revenue per year (rough)"] = df["Extra revenue (90d, rough)"] * 4
         base = df["Extra revenue (90d, rough)"]
+        if link_price:
+            df["Upside per € of one link"] = df["Extra revenue per year (rough)"] / link_price
     else:
         base = df["Extra clicks (90d, rough)"]
+    df["How calculated"] = [_calc_text(r, vpv and r.get("Value per visit"), currency) for _, r in df.iterrows()]
     df["Client focus"] = ["yes" if any(f in norm_key(u) for f in focus) else "" for u in df["Page"]] if focus else ""
     df["_score"] = base * df["_kind"].map(RESPONSE_WEIGHT).fillna(1.0) * df["Client focus"].map(
         lambda v: FOCUS_WEIGHT if v == "yes" else 1.0)
@@ -333,3 +388,15 @@ def value_per_visit(ga4: pd.DataFrame | None, host: str) -> dict:
     out["_avg"] = float(g["R"].sum() / tot_s) if tot_s else None
     out[f"_avg:{host}"] = out["_avg"]
     return out
+
+
+
+def _calc_text(r, vpv, currency: str = "€") -> str:
+    """The sum behind one row, in plain numbers."""
+    if pd.isna(r.get("Position")) or pd.isna(r.get("Target position")):
+        return ""
+    t = (f"{r['Impressions (90d)']:,.0f} impressions × ({r['CTR at target']:.1%} at position {int(r['Target position'])} "
+         f"− {r['CTR now']:.1%} at {r['Position']:.0f}) = {r['Extra clicks (90d, rough)']:,.0f} extra clicks")
+    if vpv:
+        t += f" × {currency}{float(vpv):.2f} per visit = {currency}{r['Extra revenue (90d, rough)']:,.0f} per 90 days"
+    return t

@@ -73,3 +73,17 @@ def test_allocation_ranks_by_value_and_sums_to_one():
     assert abs(al["Share of next budget"].sum() - 1) < 1e-9
     al2 = ba.allocation(pages, targets, None, focus=["/a"])
     assert "Client focus" in al2.columns and al2.set_index("Page").loc["https://shop.nl/a", "Client focus"] == "yes"
+
+
+def test_own_ctr_curve_and_realistic_target():
+    import pandas as pd
+    from modules import budget_advice as ba
+    gsc = pd.DataFrame({"Page": ["https://x.nl/a", "https://x.nl/b", "https://x.nl/"],
+                        "Clicks": [60, 30, 9000], "Impressions": [3000, 3000, 10000], "Avg Position": [3.2, 8.0, 1.0]})
+    c = ba.own_ctr_curve(gsc)
+    assert c[(3, 3)]["source"] == "own data" and abs(c[(3, 3)]["ctr"] - 0.02) < 1e-9
+    assert c[(1, 1)]["source"] == "benchmark"          # homepage (brand) is left out of the measurement
+    assert ba.target_position(9) == 3 and ba.target_position(14) == 7
+    t = pd.DataFrame({"Page": ["https://x.nl/b"], "Position": [8.0], "Impressions (90d)": [10000], "Clicks (90d)": [100]})
+    al = ba.allocation(None, t, curve=c)
+    assert "10,000 impressions" in al.loc[0, "How calculated"] and al.loc[0, "Target position"] == 3
