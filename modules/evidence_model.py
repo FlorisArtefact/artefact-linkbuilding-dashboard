@@ -170,3 +170,20 @@ def cohort_table(pt: pd.DataFrame, by: str = "Type") -> pd.DataFrame:
     if not out.empty:
         out["YoY now (pooled)"] = out["Last 3 months"] / out["Same months last year"].where(out["Same months last year"] > 0) - 1
     return out
+
+
+
+def group_profile(pages: pd.DataFrame, links_df: pd.DataFrame, value: str = "Revenue") -> dict:
+    """Who is in each line of the chart. pages: one row per landing page for the selected period with columns
+    'key' (path as used for link matching), 'type' (page type) and `value`. Per group: number of pages with a value,
+    mix of page types and median value per page. Answers 'is the grey line comparable to the pink one?'."""
+    if pages is None or pages.empty or value not in pages.columns:
+        return {}
+    pg = pages[pd.to_numeric(pages[value], errors="coerce").fillna(0) > 0]
+    pg = pg.groupby(["key", "type"], as_index=False)[value].sum()
+    links = linked_paths(links_df)
+    out = {}
+    for name, part in (("Pages with links", pg[pg["key"].isin(links)]), ("Pages without links", pg[~pg["key"].isin(links)])):
+        out[name] = {"pages": int(len(part)), "types": part["type"].value_counts().to_dict(),
+                     "total": float(part[value].sum()), "median": float(part[value].median()) if len(part) else 0.0}
+    return out

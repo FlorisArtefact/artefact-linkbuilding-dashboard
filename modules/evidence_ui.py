@@ -69,6 +69,42 @@ def _verdict_box(s: dict, metric: str) -> None:
         <div style="font-size:.88rem;color:#4A5875">{body}</div></div>""", unsafe_allow_html=True)
 
 
+
+def _page_table(per_lang: dict, langs: list) -> pd.DataFrame:
+    """Per-page GA4 totals for the selected period, keyed like combine() keys the links ('/<market>' + path)."""
+    rows = []
+    for lang in langs:
+        d = per_lang.get(lang, {}).get("pages")
+        if d is None or d.empty or "path" not in d.columns:
+            continue
+        d = d.copy()
+        d["key"] = (f"/{lang}" + d["path"].astype(str)).map(ev.norm_path)
+        d["type"] = d["path"].astype(str).map(ev.page_type)
+        rows.append(d)
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+def _profile_text(pages: pd.DataFrame, links_df: pd.DataFrame, metric: str, cur: str) -> str:
+    """Hover text: which pages make up the grey line, and how they compare with the linked pages."""
+    pr = ev.group_profile(pages, links_df, "Revenue" if "revenue" in metric.lower() else "Sessions")
+    if not pr:
+        return ""
+    def mix(t):
+        lab = {"Commercial page": ("commercial page", "commercial pages"), "Content / blog": ("blog/content page", "blog/content pages"),
+               "Homepage": ("homepage", "homepages")}
+        return ", ".join(f"{n:,} {lab.get(k, (k.lower(), k.lower()))[n != 1]}"
+                         for k, n in sorted(t.items(), key=lambda x: -x[1])) or "none"
+    a, b = pr["Pages with links"], pr["Pages without links"]
+    unit = metric.lower().replace("organic ", "")
+    fmt = (lambda v: f"{cur}{v:,.0f}") if cur else (lambda v: f"{v:,.0f}")
+    return (f"**Grey line, pages without links:** the whole site minus the linked pages. In the selected period that is **{b['pages']:,} pages** ({mix(b['types'])}). Median {fmt(b['median'])} per page.\n\n"
+            f"**Pink line, pages with links:** {a['pages']} pages ({mix(a['types'])}). Median {fmt(a['median'])} per page.\n\n"
+            "So the grey line is the rest of the site, not a matched control group: the pages differ in size, type "
+            "and competition. It is used as a baseline for the same seasons, prices and site changes. Read the lines "
+            "for direction: if pink grows faster than grey after the first link, the linked pages outgrow the rest of "
+            "the site. Links to the homepage and categories also pass value to unlinked pages, so the gap understates "
+            "the effect rather than overstates it.")
+
 def _yoy_chart(pv: pd.DataFrame, links_df: pd.DataFrame, start, title: str) -> go.Figure:
     fig = go.Figure()
     groups = ev.group_series(pv, ev.linked_paths(links_df))
@@ -145,7 +181,9 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                 g = s["groups"][name]
                 col.metric(name, _pct(g["yoy_now"]), delta=f"before campaign: {_pct(g['yoy_before'])}" if g["yoy_before"] is not None
                            else "no baseline before", delta_color="off",
-                           help="Last 3 complete months versus the same 3 months a year earlier.")
+                           help="Last 3 complete months versus the same 3 months a year earlier."
+                                + ("" if name != "Pages without links" else " These are all other pages of the site with "
+                                   "organic traffic, not a matched control group; see the ⓘ under the chart."))
             if s.get("above_control_value") is not None:
                 v = s["above_control_value"]
                 k[3].metric("Extra vs. unlinked trend, last 3 months", (f"{'+' if v >= 0 else '-'}{cur}{abs(v):,.0f}"),
@@ -154,6 +192,9 @@ def render_evidence_section(per_lang: dict, langs: list, domains: dict, history:
                                  "pages, so the real effect is probably larger than this number.")
             st.plotly_chart(_yoy_chart(pv, links, s["campaign_start"],
                                        f"Year-over-year growth of {metric.lower()} (rolling 3 months) · {market}"), width="stretch")
+            _pt = _profile_text(_page_table(per_lang, sel), links, metric, cur)
+            if _pt:
+                st.markdown("ⓘ **Which pages are the grey line (pages without links)?** Hover the question mark.", help=_pt)
             st.caption("Yellow band = first 3 months after the first link: too early to expect an effect. If the pink line rises above the "
                        "grey one after the dashed line, linked pages are doing better than the rest.")
 

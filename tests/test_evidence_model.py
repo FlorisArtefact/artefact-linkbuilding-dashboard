@@ -55,3 +55,17 @@ def test_page_types_and_cohorts():
 def test_yoy_curve_has_no_values_without_history():
     s = pd.Series([1.0] * 10, index=pd.date_range("2026-01-01", periods=10, freq="MS"))
     assert ev.yoy_curve(s).empty
+
+
+
+def test_group_profile_counts_pages_and_types():
+    import pandas as pd
+    from modules import evidence_model as ev
+    pages = pd.DataFrame({"key": ["/NL", "/NL/laminaat", "/NL/blog/tips", "/NL/pvc", "/NL/old"],
+                          "type": ["Homepage", "Commercial page", "Content / blog", "Commercial page", "Commercial page"],
+                          "Revenue": [100.0, 50.0, 5.0, 20.0, 0.0]})
+    links = pd.DataFrame({"Link to": ["https://x/NL/laminaat/"], "LL Date": ["2025-06-01"]})
+    pr = ev.group_profile(pages, links)
+    assert pr["Pages with links"]["pages"] == 1
+    assert pr["Pages without links"]["pages"] == 3          # /old has no revenue and is left out
+    assert pr["Pages without links"]["types"]["Content / blog"] == 1

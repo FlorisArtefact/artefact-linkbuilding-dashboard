@@ -129,33 +129,45 @@ def _check_password() -> bool:
     if st.session_state.get("_authenticated"):
         return True
 
-    # ── Login screen ────────────────────────────────────────────────────────────
-    NAVY = "#1B2D5B"
-    PINK = "#E5007D"
-    st.markdown(f"""
+    # ── Login screen (Artefact style: navy → purple → pink gradient, white card, Roboto) ──
+    import base64
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "artefact-logo.png"), "rb") as f:
+            _logo = f'<img class="lg-logo" src="data:image/png;base64,{base64.b64encode(f.read()).decode()}" alt="Artefact">'
+    except OSError:
+        _logo = '<div class="lg-word">ARTEFACT</div>'
+    st.markdown("""
     <style>
-    #MainMenu, footer, header {{visibility: hidden;}}
-    .login-wrap {{
-        max-width: 400px; margin: 8vh auto; padding: 2.5rem;
-        background: white; border-radius: 14px;
-        box-shadow: 0 4px 24px rgba(27,45,91,0.12);
-        border-top: 4px solid {PINK};
-    }}
-    .login-title {{
-        color: {NAVY}; font-size: 1.4rem; font-weight: 700;
-        margin-bottom: 0.3rem;
-    }}
-    .login-sub {{color: #8B9BB4; font-size: 0.88rem; margin-bottom: 1.5rem;}}
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+    #MainMenu, footer, header, [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {display:none !important;}
+    .stApp {background: linear-gradient(125deg, #002554 0%, #1B2D6B 38%, #752E7D 72%, #FF0066 100%) !important;}
+    .stApp, .stApp p, .stApp div, .stApp input, .stApp button, .stApp label {font-family: 'Roboto', sans-serif;}
+    [data-testid="stMainBlockContainer"], .block-container {padding-top: 11vh !important; max-width: 100% !important;}
+    [data-testid="stForm"] {background:#fff; border:none !important; border-radius:18px; padding:2.4rem 2.4rem 2rem;
+        box-shadow:0 18px 60px rgba(0,20,60,.35);}
+    .lg-logo {width:190px; display:block; margin:0 0 1.6rem -6px;}
+    .lg-word {font-weight:700; letter-spacing:.3em; color:#002554; font-size:1.4rem; margin-bottom:1.4rem;}
+    .lg-kicker {color:#FF0066; font-size:.74rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase;}
+    .lg-title {color:#002554; font-size:1.75rem; font-weight:700; line-height:1.15; margin:.35rem 0 .5rem;}
+    .lg-sub {color:#5B6B86; font-size:.92rem; line-height:1.45; margin-bottom:1.2rem;}
+    [data-testid="stForm"] [data-baseweb="input"] {border:1px solid #C9D2E3 !important; border-radius:10px !important; background:#F6F8FB !important;}
+    [data-testid="stForm"] button[kind="primaryFormSubmit"], [data-testid="stForm"] button[data-testid="stBaseButton-primaryFormSubmit"] {
+        background: linear-gradient(90deg, #002554, #FF0066) !important; border:none !important; border-radius:10px !important;
+        font-weight:600 !important; height:2.9rem;}
+    .lg-foot {color:rgba(255,255,255,.8); font-size:.8rem; text-align:center; margin-top:1.4rem; letter-spacing:.04em;}
     </style>
-    <div class="login-wrap">
-        <div class="login-title">🔗 Linkbuilding Dashboard</div>
-        <div class="login-sub">Artefact — enter your password to continue</div>
-    </div>
     """, unsafe_allow_html=True)
-
-    pwd = st.text_input("Password", type="password", label_visibility="collapsed",
-                        placeholder="Enter password...")
-    if st.button("Login", width="stretch", type="primary"):
+    _l, _mid, _r = st.columns([1, 1.15, 1])
+    with _mid:
+        with st.form("login", border=False):
+            st.markdown(f'{_logo}<div class="lg-kicker">Linkbuilding &amp; SEO</div>'
+                        '<div class="lg-title">Linkbuilding Dashboard</div>'
+                        '<div class="lg-sub">What our link campaigns do for your visibility in Google. '
+                        'Enter the password you received from Artefact.</div>', unsafe_allow_html=True)
+            pwd = st.text_input("Password", type="password", label_visibility="collapsed", placeholder="Password")
+            submitted = st.form_submit_button("Sign in", width="stretch", type="primary")
+        st.markdown('<div class="lg-foot">Artefact · Data &amp; AI consulting</div>', unsafe_allow_html=True)
+    if submitted:
         if pwd and pwd in pmap:                   # one app, several clients: the password picks the client
             st.session_state["_authenticated"] = True
             st.session_state["_client"] = pmap[pwd]
@@ -164,7 +176,8 @@ def _check_password() -> bool:
             st.session_state["_authenticated"] = True
             st.rerun()
         else:
-            st.error("Incorrect password — please try again.")
+            with _mid:
+                st.error("Incorrect password. Please try again.")
     return False
 
 def _access_mode() -> str:
@@ -358,7 +371,7 @@ with st.sidebar:
     st.markdown(f"<div style='font-size:1.25rem;font-weight:700;color:{NAVY};line-height:1.1'>Artefact</div>", unsafe_allow_html=True)
     st.markdown(f"<div style='font-size:0.75rem;color:{MID};margin-bottom:.6rem;'>Linkbuilding dashboard</div>", unsafe_allow_html=True)
     if st.session_state.get("_client") and len(_clients_secret()) > 1:
-        if st.button("↩ Other client / sign out", width="stretch"):
+        if st.button("↩ Other campaign / sign out", width="stretch"):
             for _k in ("_authenticated", "_client"):
                 st.session_state.pop(_k, None)
             st.rerun()
@@ -891,7 +904,7 @@ if HAS_REVENUE:
         _gscm = {l: get_gsc_monthly(_creds_file, config.get("gsc_properties", {}).get(l, "")) for l in LANGUAGES} if use_gsc_api else {}
 
     evidence_headline = render_evidence_section(
-        per_lang={l: {"monthly": monthly_data.get(l), "links": raw_links.get(l, pd.DataFrame())} for l in LANGUAGES},
+        per_lang={l: {"monthly": monthly_data.get(l), "links": raw_links.get(l, pd.DataFrame()), "pages": ga4_data.get(l)} for l in LANGUAGES},
         langs=LANGUAGES, domains=config.get("domains", {}), history=_hist, gsc_monthly=_gscm, currency="€",
         categories=config.get("categories"), content_keywords=config.get("content_keywords"), demo_mode=demo_mode, flags=FLAGS)
     TAB["effect"].__exit__(None, None, None)
