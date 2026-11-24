@@ -179,7 +179,7 @@ def _check_password() -> bool:
     .stApp {background: linear-gradient(125deg, #002554 0%, #1B2D6B 38%, #752E7D 72%, #FF0066 100%) !important;}
     .stApp, .stApp p, .stApp div, .stApp input, .stApp button, .stApp label {font-family: 'Roboto', sans-serif;}
     [data-testid="stMainBlockContainer"], .block-container {padding-top: 11vh !important; max-width: 100% !important;}
-    [data-testid="stForm"] {background:#fff; border:none !important; border-radius:18px; padding:2.4rem 2.4rem 2rem;
+    [data-testid="stForm"] {max-width:440px; margin:0 auto; background:#fff; border:none !important; border-radius:18px; padding:2.4rem 2.4rem 2rem;
         box-shadow:0 18px 60px rgba(0,20,60,.35);}
     .lg-logo {width:190px; display:block; margin:0 0 1.6rem -6px;}
     .lg-word {font-weight:700; letter-spacing:.3em; color:#002554; font-size:1.4rem; margin-bottom:1.4rem;}
@@ -199,7 +199,7 @@ def _check_password() -> bool:
     .lg-foot {color:rgba(255,255,255,.8); font-size:.8rem; text-align:center; margin-top:1.4rem; letter-spacing:.04em;}
     </style>
     """, unsafe_allow_html=True)
-    _l, _mid, _r = st.columns([1, 1.15, 1])
+    _l, _mid, _r = st.columns([1, 2, 1])
     with _mid:
         with st.form("login", border=False):
             st.markdown(f'{_logo}<div class="lg-title">Linkbuilding Dashboard</div>'

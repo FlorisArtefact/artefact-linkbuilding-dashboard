@@ -363,6 +363,10 @@ def allocation(pages: pd.DataFrame | None, targets: pd.DataFrame | None, value_p
             df["Upside per € of one link"] = df["Extra revenue per year (rough)"] / link_price
     else:
         base = df["Extra clicks (90d, rough)"]
+        df["Extra visits per year (rough)"] = df["Extra clicks (90d, rough)"] * 4
+        if link_price:
+            df["Link price per extra visit"] = link_price / df["Extra visits per year (rough)"].where(
+                df["Extra visits per year (rough)"] > 0)
     df["How calculated"] = [_calc_text(r, vpv and r.get("Value per visit"), currency) for _, r in df.iterrows()]
     df["Client focus"] = ["yes" if any(f in norm_key(u) for f in focus) else "" for u in df["Page"]] if focus else ""
     df["_score"] = base * df["_kind"].map(RESPONSE_WEIGHT).fillna(1.0) * df["Client focus"].map(
@@ -399,4 +403,6 @@ def _calc_text(r, vpv, currency: str = "€") -> str:
          f"− {r['CTR now']:.1%} at {r['Position']:.0f}) = {r['Extra clicks (90d, rough)']:,.0f} extra clicks")
     if vpv:
         t += f" × {currency}{float(vpv):.2f} per visit = {currency}{r['Extra revenue (90d, rough)']:,.0f} per 90 days"
+    else:
+        t += f" per 90 days ≈ {r['Extra clicks (90d, rough)'] * 4:,.0f} per year"
     return t

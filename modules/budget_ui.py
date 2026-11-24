@@ -117,12 +117,17 @@ def render_budget_advice(client: str, period_label: str, overall_key: str, marke
             "Upside per € of one link": st.column_config.NumberColumn("Upside per year ÷ price of one link", format="%.1f×",
                 help="What reaching the target is worth per year, divided by the average price of one link so far."),
             "How calculated": st.column_config.TextColumn("The sum", width="large"),
+            "Extra visits per year (rough)": st.column_config.NumberColumn("Extra visitors per year (rough)", format="%,.0f"),
+            "Link price per extra visit": st.column_config.NumberColumn("Price of one link per extra visitor (year 1)",
+                format="€%.2f", help="Average price of one link ÷ extra visitors per year at the target position. "
+                                     "Compare with the cost per click in Google Ads."),
             "Client focus": st.column_config.TextColumn("Your priority"),
             "Why here": st.column_config.TextColumn("Why here", width="large"),
         }
         order = [c for c in ["Market", "Page", "Share of next budget", "Links so far", "Position", "Target position",
                              "Impressions (90d)", "Extra clicks (90d, rough)", "Value per visit", "Extra revenue per year (rough)",
-                             "Upside per € of one link", "How calculated", "Client focus", "Why here"] if c in show.columns]
+                             "Upside per € of one link", "Extra visits per year (rough)", "Link price per extra visit",
+                             "How calculated", "Client focus", "Why here"] if c in show.columns]
         st.dataframe(show[order], width="stretch", hide_index=True, column_config=cfg)
         if not focus_set:
             st.caption("Your own priorities (for example a brand or product range you want to grow) can be added; "
@@ -207,7 +212,9 @@ def _method(top, curve, link_price, cur, valued) -> None:
              ("3 · Click chance", "Share of people that click at each position, <b>measured on your own site</b>. "
                                   "Published benchmarks only fill gaps."),
              ("4 · Value of a visit", "GA4 organic revenue ÷ organic sessions of that page (site average when the page "
-                                      "has few visits)." if valued else "Without GA4 revenue the ranking uses extra clicks.")]
+                                      "has few visits)." if valued else
+                                      "No revenue data shared (no GA4), so the value is shown as <b>what one link costs per "
+                                      "extra visitor</b>. Compare it with what a click costs in Google Ads.")]
     for col, (h, t) in zip(st.columns(4), steps):
         col.markdown(_CARD.format(h=h, t=t), unsafe_allow_html=True)
     c3 = (curve or {}).get((3, 3), {})
@@ -222,6 +229,10 @@ def _method(top, curve, link_price, cur, valued) -> None:
         if link_price:
             ex += (f". One link costs on average {cur}{link_price:,.0f}, so reaching the target is worth about "
                    f"<b>{yr / link_price:.0f}× the price of one link</b> per year")
+    cpv = top.get("Link price per extra visit")
+    if not valued and cpv is not None and pd.notna(cpv):
+        ex += (f". One link costs on average {cur}{link_price:,.0f}: about <b>{cur}{cpv:.2f} per extra visitor</b> in the first "
+               "year alone. Compare that with what a click on the same terms costs in Google Ads, which stops when the ad budget stops")
     st.markdown('<div style="background:#EEF1F6;border-radius:12px;padding:.9rem 1.1rem;margin:.8rem 0;color:#1B2D5B">'
                 '<div style="font-size:.72rem;letter-spacing:.8px;text-transform:uppercase;opacity:.7">'
                 f'Worked example: the top page</div><div style="margin-top:.3rem">{ex}.</div></div>', unsafe_allow_html=True)
