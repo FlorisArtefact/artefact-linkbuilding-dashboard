@@ -205,8 +205,9 @@ def _method(top, curve, link_price, cur, valued) -> None:
     """Visible explanation of the advice: four steps, the sum for the top page, the CTR curve used and sources."""
     st.markdown('<div class="section-title">How the advice is calculated</div>', unsafe_allow_html=True)
     st.markdown('<div class="ba-basis">The standard way to size an SEO opportunity: <b>how often a page is seen in Google '
-                '× how many more of those people click when it ranks higher × what a visit is worth</b>. Every number comes '
-                'from your own Search Console and GA4 data, not from estimates.</div>', unsafe_allow_html=True)
+                '× how many more of those people click when it ranks higher' + (' × what a visit is worth' if valued else '')
+                + '</b>. Every number comes from your own ' + ('Search Console and GA4 data' if valued else 'Search Console data')
+                + ', not from estimates.</div>', unsafe_allow_html=True)
     steps = [("1 · Demand", "How often the page was shown in Google in the last 90 days (Search Console impressions)."),
              ("2 · Realistic step up", "Page 1 → top 3. Page 2 → position 7. Not a jump to #1."),
              ("3 · Click chance", "Share of people that click at each position, <b>measured on your own site</b>. "
